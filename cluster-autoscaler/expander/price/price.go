@@ -87,16 +87,27 @@ func NewStrategy(pricingModel cloudprovider.PricingModel,
 
 // BestOption selects option based on cost and preferred node type.
 func (p *priceBased) BestOption(expansionOptions []expander.Option, nodeInfos map[string]*schedulercache.NodeInfo) *expander.Option {
+	glog.V(5).Info("Calculate best option by price")
+	for _, foo := range expansionOptions {
+		glog.V(5).Infof("-- Option: node-group=(%s) desired-nodes=(%d) required-by-pods=(%d)", foo.NodeGroup.Debug(), foo.NodeCount, len(foo.Pods))
+	}
+
+
 	var bestOption *expander.Option
 	bestOptionScore := 0.0
 	now := time.Now()
 	then := now.Add(time.Hour)
+
+	glog.V(5).Info("get preferred node")
 
 	preferredNode, err := p.preferredNodeProvider.Node()
 	if err != nil {
 		glog.Errorf("Failed to get preferred node, switching to default: %v", err)
 		preferredNode = defaultPreferredNode
 	}
+
+	glog.V(5).Info("get stabilization price")
+
 	stabilizationPrice, err := p.pricingModel.PodPrice(priceStabilizationPod, now, then)
 	if err != nil {
 		glog.Errorf("Failed to get price for stabilization pod: %v", err)
@@ -105,11 +116,15 @@ func (p *priceBased) BestOption(expansionOptions []expander.Option, nodeInfos ma
 
 nextoption:
 	for _, option := range expansionOptions {
+		glog.V(5).Info("range option: %s", option.NodeGroup.Debug())
+
 		nodeInfo, found := nodeInfos[option.NodeGroup.Id()]
 		if !found {
 			glog.Warningf("No node info for %s", option.NodeGroup.Id())
 			continue
 		}
+
+		glog.V(5).Info("get price for option: %s", option.NodeGroup.Debug())
 		nodePrice, err := p.pricingModel.NodePrice(nodeInfo.Node(), now, then)
 		if err != nil {
 			glog.Warningf("Failed to calculate node price for %s: %v", option.NodeGroup.Id(), err)
@@ -118,6 +133,7 @@ nextoption:
 		totalNodePrice := nodePrice * float64(option.NodeCount)
 		totalPodPrice := 0.0
 		for _, pod := range option.Pods {
+			glog.V(5).Info("get pod-price for option: %s (%v)", option.NodeGroup.Debug(), pod)
 			podPrice, err := p.pricingModel.PodPrice(pod, now, then)
 			if err != nil {
 				glog.Warningf("Failed to calculate pod price for %s/%s: %v", pod.Namespace, pod.Name, err)

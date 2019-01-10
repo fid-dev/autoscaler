@@ -66,20 +66,26 @@ func (d *descriptor) Price(instanceType string, bidPrice float64, availabilityZo
 	prices := make([]float64, len(availabilityZones))
 
 	for i, zone := range availabilityZones {
+		glog.V(5).Infof("Check Price for instance=%s and zone=%s", instanceType, zone)
 		maxPrice, err := d.maxSpotPriceForDuration(instanceType, zone, lookupWindow)
 		if err != nil {
+			glog.V(5).Infof("Error at d.maxSpotPriceForDuration: %v", err)
 			return avgPrice, err
 		}
 
 		if maxPrice == 0.0 {
+			glog.V(5).Info("Error: price is 0.0")
 			return avgPrice, fmt.Errorf("got invalid spot price of 0.0 for instance type %s in availability zone %s", instanceType, zone)
 		}
 
 		if maxPrice > bidPrice {
+			glog.V(5).Info("Error: price=%.4f is greater than bid price=%.4f", maxPrice, bidPrice)
 			return 0, fmt.Errorf("spot price bid of %.4f lower than current offer of %.4f at %s", bidPrice, maxPrice, zone)
 		}
 
 		prices[i] = maxPrice
+
+		glog.V(5).Infof("Got Price for instance=%s and zone=%s price=%.4f", instanceType, zone, maxPrice)
 	}
 
 	var sum float64
@@ -180,7 +186,9 @@ func (d *descriptor) syncSpotPriceHistory(instanceType string, availabilityZone 
 		return err
 	}
 
+	glog.V(5).Info("History before add")
 	history.Add(res.HistoryItems)
+	glog.V(5).Info("History after add")
 
 	return nil
 }

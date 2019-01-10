@@ -17,6 +17,7 @@ limitations under the License.
 package price
 
 import (
+	"github.com/golang/glog"
 	"net/http"
 
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -53,17 +54,20 @@ func NewDescriptor(s *session.Session) *shapeDescriptor {
 
 // Price calls, depending whether the asg has a spot price or not, the spot or the on-demand price descriptor
 func (d *shapeDescriptor) Price(asgName string) (price float64, err error) {
+	glog.V(5).Infof("describe asg=%s", asgName)
 	asg, err := d.autoscaling.DescribeAutoscalingGroup(asgName)
 	if err != nil {
 		return 0, err
 	}
 
+	glog.V(5).Infof("describe asg=%s launchconfiguration=%s", asgName, asg.LaunchConfigurationName)
 	lc, err := d.launchConfiguration.DescribeLaunchConfiguration(asg.LaunchConfigurationName)
 	if err != nil {
 		return 0, err
 	}
 
 	if lc.HasSpotMarkedBid {
+		glog.V(5).Infof("describe spot prices: %s %.4f %v", lc.InstanceType, lc.SpotPrice, asg.AvailabilityZones)
 		return d.spot.Price(lc.InstanceType, lc.SpotPrice, asg.AvailabilityZones...)
 	}
 

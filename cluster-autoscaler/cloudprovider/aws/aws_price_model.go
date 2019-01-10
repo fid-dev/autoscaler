@@ -17,6 +17,7 @@ limitations under the License.
 package aws
 
 import (
+	"github.com/golang/glog"
 	"math"
 	"time"
 
@@ -86,6 +87,7 @@ func (pm *priceModel) NodePrice(node *apiv1.Node, startTime time.Time, endTime t
 		asgName = asg.Name
 	}
 
+	glog.V(5).Infof("get node-price for asg=%s", asgName)
 	hourlyPrice, err := pm.priceDescriptor.Price(asgName)
 	if err != nil {
 		return 0, fmt.Errorf("failed to describe price for asg %s: %v", asgName, err)

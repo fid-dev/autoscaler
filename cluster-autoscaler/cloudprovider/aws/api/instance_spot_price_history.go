@@ -64,12 +64,18 @@ func (spd *spotPriceHistoryService) DescribeSpotPriceHistory(instanceType string
 	prices := make(SpotPriceItems, 0)
 
 	for {
+		glog.V(5).Infof("Describe Spot Price History: %+v", req)
 		res, err := spd.service.DescribeSpotPriceHistory(req)
+		glog.V(5).Infof("Error: %v Response: %v", err, res)
 		if err != nil {
 			return nil, err
 		}
 
 		prices = append(prices, convertSpotPriceItems(res.SpotPriceHistory...)...)
+
+		if req.MaxResults != nil && len(prices) >= int(aws.Int64Value(req.MaxResults)) {
+			break
+		}
 
 		req.NextToken = res.NextToken
 		if req.NextToken == nil || len(*req.NextToken) == 0 {
@@ -117,9 +123,9 @@ func (sps SpotPriceItems) Swap(i, j int) {
 }
 
 func convertSpotPriceItems(in ...*ec2.SpotPrice) SpotPriceItems {
-	prices := make(SpotPriceItems, len(in))
+	prices := make(SpotPriceItems, 0, len(in))
 
-	for i, item := range in {
+	for _, item := range in {
 		priceValue := aws.StringValue(item.SpotPrice)
 		price, err := strconv.ParseFloat(priceValue, 64)
 		if err != nil {
@@ -127,7 +133,7 @@ func convertSpotPriceItems(in ...*ec2.SpotPrice) SpotPriceItems {
 			continue
 		}
 
-		prices[i] = newSpotPriceItem(price, *item.Timestamp)
+		prices = append(prices, newSpotPriceItem(price, *item.Timestamp))
 	}
 
 	return prices
