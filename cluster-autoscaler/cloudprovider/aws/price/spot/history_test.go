@@ -182,7 +182,7 @@ func TestHistory_Empty(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "filled history: return true",
+			name: "filled history: return false",
 			history: newHistoryMock(time.Time{}, 1*time.Second, api.SpotPriceItems{
 				{
 					Timestamp: time.Now(),
@@ -346,11 +346,11 @@ func TestHistory_SetLastSync(t *testing.T) {
 		history *History
 	}{
 		{
-			name:    "empty history: return true",
+			name:    "zero sync time: set actual time",
 			history: newHistoryMock(time.Time{}, 1*time.Second, api.SpotPriceItems{}),
 		},
 		{
-			name:    "filled history: return true",
+			name:    "existing sync time: set actual time",
 			history: newHistoryMock(testTimestamp, 1*time.Second, api.SpotPriceItems{}),
 		},
 	}
