@@ -18,7 +18,6 @@ package cloudprovider
 
 import (
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/aws/endpoints"
 	"math/rand"
 	"time"
 
@@ -39,7 +38,6 @@ const (
 
 // BuildReadyConditions sets up mock NodeConditions
 func BuildReadyConditions() []apiv1.NodeCondition {
-	_ = endpoints.UsWest2RegionID
 	lastTransition := time.Now().Add(-time.Minute)
 	return []apiv1.NodeCondition{
 		{
