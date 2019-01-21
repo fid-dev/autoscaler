@@ -17,9 +17,7 @@ limitations under the License.
 package api
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -27,7 +25,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/pricing"
 	"github.com/golang/glog"
+	"github.com/pkg/errors"
 )
 
 const (
@@ -35,6 +37,34 @@ const (
 	awsPricingAPIURLTemplate     = "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/%s/index.json"
 	instanceOperatingSystemLinux = "Linux"
 	instanceTenancyShared        = "Shared"
+)
+
+// TODO <ylallemant> find some API for this map - support case opened
+var (
+	azIdRegexp    = regexp.MustCompile(`(\d+)$`)
+	regionNameMap = map[string]string{
+		"USA Ost (Ohio)":             "us-east-2",
+		"USA Ost (Nord-Virginia)":    "us-east-1",
+		"USA West (Nordkalifornien)": "us-west-1",
+		"USA West (Oregon)":          "us-west-2",
+		"Asia Pacific (Mumbai)":      "ap-south-1",
+		"Asia Pacific (Osaka-Local)": "ap-northeast-3",
+		"Asia Pacific (Seoul)":       "ap-northeast-2",
+		"Asia Pacific (Singapur)":    "ap-southeast-1",
+		"Asia Pacific (Sydney)":      "ap-southeast-2",
+		"Asia Pacific (Tokio)":       "ap-northeast-1",
+		"Canada (Central)":           "ca-central-1",
+		"China (Peking)":             "cn-north-1",
+		"China (Ningxia)":            "cn-northwest-1",
+		"EU (Frankfurt)":             "eu-central-1",
+		"EU (Irland)":                "eu-west-1",
+		"EU (London)":                "eu-west-2",
+		"EU (Paris)":                 "eu-west-3",
+		"EU (Stockholm)":             "eu-north-1",
+		"South America (São Paulo)":  "sa-east-1",
+		"AWS GovCloud (US-East)":     "us-gov-east-1",
+		"AWS GovCloud (USA)":         "us-gov-west-1",
+	}
 )
 
 // InstanceInfo holds AWS EC2 instance information
@@ -57,14 +87,21 @@ type httpClient interface {
 
 // NewEC2InstanceInfoService is the constructor of instanceInfoService which is a wrapper for AWS Pricing API.
 func NewEC2InstanceInfoService(client httpClient) *instanceInfoService {
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String("us-east-1"),
+	})
+	if err != nil {
+		panic(errors.Wrap(err, "could not create AWS session"))
+	}
+
 	return &instanceInfoService{
-		client: client,
+		client: pricing.New(sess),
 		cache:  make(instanceInfoCache),
 	}
 }
 
 type instanceInfoService struct {
-	client httpClient
+	client *pricing.Pricing
 	cache  instanceInfoCache
 	sync.RWMutex
 }
@@ -215,6 +252,10 @@ func (s *instanceInfoService) sync(availabilityZone string) error {
 
 func (s *instanceInfoService) fetch(availabilityZone string, etag string) (*response, error) {
 	url := fmt.Sprintf(awsPricingAPIURLTemplate, availabilityZone)
+	regionName, err := regionFullName(availabilityZone)
+	if err != nil {
+		return nil, err
+	}
 
 	req, err := http.NewRequest("GET", url, nil)
 
@@ -222,29 +263,54 @@ func (s *instanceInfoService) fetch(availabilityZone string, etag string) (*resp
 		req.Header.Add("If-None-Match", etag)
 	}
 
-	res, err := s.client.Do(req)
+	input := &pricing.GetProductsInput{
+		Filters: []*pricing.Filter{
+			{
+				Type:  aws.String("TERM_MATCH"),
+				Field: aws.String("ServiceCode"),
+				Value: aws.String("AmazonEC2"),
+			},
+			{
+				Type:  aws.String("TERM_MATCH"),
+				Field: aws.String("location"),
+				Value: aws.String(regionName),
+			},
+			{
+				Type:  aws.String("TERM_MATCH"),
+				Field: aws.String("capacitystatus"),
+				Value: aws.String("Used"),
+			},
+			{
+				Type:  aws.String("TERM_MATCH"),
+				Field: aws.String("tenancy"),
+				Value: aws.String("Shared"),
+			},
+			{
+				Type:  aws.String("TERM_MATCH"),
+				Field: aws.String("preInstalledSw"),
+				Value: aws.String("NA"),
+			},
+		},
+	}
+
+	output, err := s.client.GetProducts(input)
 	if err != nil {
-		return nil, fmt.Errorf("error fetching [%s]", url)
-	}
-
-	defer res.Body.Close()
-
-	if res.StatusCode == 304 {
-		return nil, nil
-	}
-
-	var body []byte
-	if body, err = ioutil.ReadAll(res.Body); err != nil {
-		return nil, fmt.Errorf("error loading content of %s", url)
-	}
-
-	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("got unexpected http status code %d with body [%s]", res.StatusCode, string(body))
+		return nil, errors.Wrapf(err, "could not fetch products for AZ %s", availabilityZone)
 	}
 
 	var data = new(response)
-	if err := json.Unmarshal(body, data); err != nil {
-		return nil, fmt.Errorf("error unmarshaling %s with body [%s]", url, string(body))
+
+	for _, entry := range output.PriceList {
+		rawProduct := entry["product"]
+		rawTerms := entry["terms"]
+
+		fmt.Println("RAW ENTRY", entry)
+		fmt.Println("---------------")
+		fmt.Println("RAW PRODUCT", rawProduct)
+		fmt.Println("---------------")
+		fmt.Println("RAW Terms", rawTerms)
+
+		return nil, errors.New("END OF TEST")
 	}
 
 	return data, nil
@@ -285,6 +351,11 @@ func (b *regionalInstanceInfoBucket) Add(info ...InstanceInfo) {
 	defer b.Unlock()
 
 	b.info = append(b.info, info...)
+}
+
+type priceListEntry struct {
+	Product product `json:"product"`
+	Terms   terms   `json:"terms"`
 }
 
 type response struct {
@@ -353,4 +424,14 @@ func parseCPU(cpu string) (int64, error) {
 		return 0, fmt.Errorf("error parsing cpu [%s] %v", cpu, err)
 	}
 	return i, nil
+}
+
+func regionFullName(availabilityzone string) (string, error) {
+	regionShortName := azIdRegexp.ReplaceAllString(availabilityzone, "")
+
+	if fullName, ok := regionNameMap[regionShortName]; ok {
+		return fullName, nil
+	}
+
+	return "", errors.New(fmt.Sprintf("region full name for not found for availability zone: %s and region %s", availabilityzone, regionShortName))
 }
