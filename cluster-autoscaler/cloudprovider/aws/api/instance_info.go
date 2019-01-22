@@ -28,8 +28,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/pricing"
-	"github.com/golang/glog"
 	"github.com/pkg/errors"
+	"k8s.io/klog"
 )
 
 const (
@@ -152,7 +152,7 @@ func (s *instanceInfoService) sync(availabilityZone string) error {
 	}
 
 	defer func() {
-		glog.V(4).Infof("Synchronized aws ec2 instance information for availability zone %s - took %s", availabilityZone, time.Now().Sub(start).String())
+		klog.V(4).Infof("Synchronized aws ec2 instance information for availability zone %s - took %s", availabilityZone, time.Now().Sub(start).String())
 	}()
 
 	if response == nil {
