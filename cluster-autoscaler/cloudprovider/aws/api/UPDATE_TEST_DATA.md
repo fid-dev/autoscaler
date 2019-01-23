@@ -12,9 +12,7 @@ cd ${GOPATH}/src/k8s.io/autoscaler
 aws pricing get-products \
   --region=us-east-1 \
   --service-code=AmazonEC2 \
-  --filter Type=TERM_MATCH,Field=operatingSystem,Value=Linux \
-           Type=TERM_MATCH,Field=tenancy,Value=Shared \
-           Type=TERM_MATCH,Field=capacitystatus,Value=Used \
+  --filter Type=TERM_MATCH,Field=capacitystatus,Value=Used \
            Type=TERM_MATCH,Field=preInstalledSw,Value=NA \
            Type=TERM_MATCH,Field=location,Value="EU (Ireland)" \
            Type=TERM_MATCH,Field=instanceType,Value="m4.xlarge" \
