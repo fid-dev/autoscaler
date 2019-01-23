@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/private/protocol"
 	"github.com/aws/aws-sdk-go/service/pricing"
 	"github.com/pkg/errors"
@@ -82,27 +81,20 @@ type InstanceInfo struct {
 	GPU int64
 }
 
-type httpClient interface {
-	Do(req *http.Request) (*http.Response, error)
+type awsClient interface {
+	GetProducts(input *pricing.GetProductsInput) (*pricing.GetProductsOutput, error)
 }
 
 // NewEC2InstanceInfoService is the constructor of instanceInfoService which is a wrapper for AWS Pricing API.
-func NewEC2InstanceInfoService(client httpClient) *instanceInfoService {
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String("us-east-1"),
-	})
-	if err != nil {
-		panic(errors.Wrap(err, "could not create AWS session"))
-	}
-
-	return &instanceInfoService{
-		client: pricing.New(sess),
+func NewEC2InstanceInfoService(client awsClient) *instanceInfoService {
+  return &instanceInfoService{
+		client: client,
 		cache:  make(instanceInfoCache),
 	}
 }
 
 type instanceInfoService struct {
-	client *pricing.Pricing
+	client awsClient
 	cache  instanceInfoCache
 	sync.RWMutex
 }

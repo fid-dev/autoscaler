@@ -23,6 +23,8 @@ import (
 	"regexp"
 	"strings"
 
+	awssdk "github.com/aws/aws-sdk-go/aws"
+	goerrors "github.com/pkg/errors"
 	"github.com/aws/aws-sdk-go/aws/session"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -103,7 +105,14 @@ func (aws *awsCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.N
 
 // Pricing returns pricing model for this cloud provider or error if not available.
 func (aws *awsCloudProvider) Pricing() (cloudprovider.PricingModel, errors.AutoscalerError) {
-	return NewPriceModel(aws.awsManager, price.NewDescriptor(session.New())), nil
+	if sess, err := session.NewSession(&awssdk.Config{
+		Region: awssdk.String("us-east-1"),
+	}); err != nil {
+		err = goerrors.Wrap(err, "could not create AWS session")
+		return nil, errors.ToAutoscalerError(errors.InternalError, err)
+	} else {
+		return NewPriceModel(aws.awsManager, price.NewDescriptor(sess)), nil
+	}
 }
 
 // GetAvailableMachineTypes get all machine types that can be requested from the cloud provider.
