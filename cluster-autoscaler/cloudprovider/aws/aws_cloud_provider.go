@@ -24,8 +24,8 @@ import (
 	"strings"
 
 	awssdk "github.com/aws/aws-sdk-go/aws"
-	goerrors "github.com/pkg/errors"
 	"github.com/aws/aws-sdk-go/aws/session"
+	goerrors "github.com/pkg/errors"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
