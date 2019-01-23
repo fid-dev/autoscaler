@@ -87,7 +87,7 @@ type awsClient interface {
 
 // NewEC2InstanceInfoService is the constructor of instanceInfoService which is a wrapper for AWS Pricing API.
 func NewEC2InstanceInfoService(client awsClient) *instanceInfoService {
-  return &instanceInfoService{
+	return &instanceInfoService{
 		client: client,
 		cache:  make(instanceInfoCache),
 	}
@@ -444,5 +444,5 @@ func regionFullName(region string) (string, error) {
 		return fullName, nil
 	}
 
-	return "", errors.New(fmt.Sprintf("region full name for region %s", region))
+	return "", errors.New(fmt.Sprintf("region full name not found for region: %s", region))
 }
