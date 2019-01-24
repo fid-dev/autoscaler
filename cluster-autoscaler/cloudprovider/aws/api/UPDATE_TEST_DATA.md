@@ -16,7 +16,7 @@ aws pricing get-products \
            Type=TERM_MATCH,Field=preInstalledSw,Value=NA \
            Type=TERM_MATCH,Field=location,Value="EU (Ireland)" \
            Type=TERM_MATCH,Field=instanceType,Value="m4.xlarge" \
-  > ./cluster-autoscaler/cloudprovider/aws/api/pricing_ondemand_eu-west-1.json
+  > ./cluster-autoscaler/cloudprovider/aws/api/test_data_ondemand_eu-west-1.json
 
 # update spot data
 

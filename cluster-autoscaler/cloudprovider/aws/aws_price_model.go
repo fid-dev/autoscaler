@@ -24,6 +24,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/aws/price"
+	gpuutils "k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 )
 
 const (
@@ -39,8 +40,6 @@ const (
 	gpuPricePerHour = 1.21 - (((16 * cpuPricePerHour) + (122 * memoryPricePerHourPerGb)) * 0.2)
 
 	gigabyte = 1024.0 * 1024.0 * 1024.0
-
-	resourceNvidiaGPU = "nvidia.com/gpu"
 )
 
 type instanceByASGFinder interface {
@@ -111,7 +110,7 @@ func getBasePrice(resources apiv1.ResourceList, startTime time.Time, endTime tim
 	sum := 0.0
 	cpu := resources[apiv1.ResourceCPU]
 	mem := resources[apiv1.ResourceMemory]
-	gpu := resources[resourceNvidiaGPU]
+	gpu := resources[gpuutils.ResourceNvidiaGPU]
 	sum += float64(cpu.MilliValue()) / 1000.0 * cpuPricePerHour * hours
 	sum += float64(gpu.MilliValue()) / 1000.0 * gpuPricePerHour * hours
 	sum += float64(mem.Value()) / gigabyte * memoryPricePerHourPerGb * hours

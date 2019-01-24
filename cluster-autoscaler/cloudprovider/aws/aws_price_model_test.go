@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 )
 
 func TestPriceModel_NodePrice(t *testing.T) {
@@ -267,7 +268,7 @@ func convertContainers(prs ...podContainers) []apiv1.Container {
 			containers[n].Resources.Requests[apiv1.ResourceCPU] = resource.MustParse(pr.cpu)
 		}
 		if len(pr.gpu) != 0 {
-			containers[n].Resources.Requests[resourceNvidiaGPU] = resource.MustParse(pr.gpu)
+			containers[n].Resources.Requests[gpu.ResourceNvidiaGPU] = resource.MustParse(pr.gpu)
 		}
 		if len(pr.memory) != 0 {
 			containers[n].Resources.Requests[apiv1.ResourceMemory] = resource.MustParse(pr.memory)
