@@ -27,6 +27,10 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 )
 
+const (
+	maxReturnedHistoryItems = 10
+)
+
 // EmptySpotPriceItem is an empty struct for that could be used for default values
 var EmptySpotPriceItem SpotPriceItem
 
@@ -58,7 +62,7 @@ func (spd *spotPriceHistoryService) DescribeSpotPriceHistory(instanceType string
 
 	if startTime.IsZero() {
 		klog.V(5).Info("initial history loading - retrieve only the last 10 prices")
-		req.SetMaxResults(10)
+		req.SetMaxResults(maxReturnedHistoryItems)
 	} else {
 		req.SetStartTime(startTime)
 	}

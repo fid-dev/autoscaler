@@ -30,7 +30,7 @@ import (
 )
 
 func loadMockData(t *testing.T) []aws.JSONValue {
-	f, err := os.Open("pricing_ondemand_eu-west-1.json")
+	f, err := os.Open("test_data_ondemand_eu-west-1.json")
 	if err != nil {
 		t.Fatalf("Failed to open mock file: %v", err)
 	}
