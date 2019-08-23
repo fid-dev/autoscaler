@@ -8,13 +8,15 @@ import (
 	"k8s.io/klog"
 )
 
+// AsgAvailabilityChecker provides an interface to check for ASG availability
 type AsgAvailabilityChecker interface {
 	AsgAvailability(name, iamInstanceProfile, instanceType string) bool
 }
 
-func NewSpotAvailabilityMonitor(requestLister api.AwsEC2SpotRequestLister, checkInterval, exclusionPeriod time.Duration) *spotAvailabilityMonitor {
+// NewSpotAvailabilityMonitor returns an instance of the spot ASG availability monitor
+func NewSpotAvailabilityMonitor(requestLister api.AwsEC2SpotRequestManager, checkInterval, exclusionPeriod time.Duration) *spotAvailabilityMonitor {
 	return &spotAvailabilityMonitor{
-		requestService:  api.NewEC2SpotRequestService(requestLister),
+		requestService:  api.NewEC2SpotRequestManager(requestLister),
 		exclusionPeriod: exclusionPeriod,
 		checkInterval:   checkInterval,
 		mux:             sync.RWMutex{},
@@ -40,7 +42,7 @@ type asgSpotStatus struct {
 }
 
 type spotAvailabilityMonitor struct {
-	requestService  api.SpotRequestService
+	requestService  api.SpotRequestManager
 	checkInterval   time.Duration
 	mux             sync.RWMutex
 	requestCache    *spotRequestCache
@@ -48,6 +50,7 @@ type spotAvailabilityMonitor struct {
 	exclusionPeriod time.Duration
 }
 
+// Run starts the monitor's check cycle
 func (m *spotAvailabilityMonitor) Run() {
 	klog.V(3).Info("spot availability monitoring started")
 	// monitor ad infinitum.
@@ -76,13 +79,20 @@ func (m *spotAvailabilityMonitor) roundtrip() error {
 
 	for _, asgName := range asgNames {
 		asgStatus := m.statusCache.get(asgName)
-		status := m.requestStatus(*asgStatus)
+		asgRequests := m.requestCache.findRequests(asgStatus.IamInstanceProfile, asgStatus.InstanceType)
+
+		status := m.requestsAllValid(asgRequests)
 
 		if asgStatus.Available != status {
 			if status == true {
 				if time.Now().Sub(asgStatus.statusChangeTime) < m.exclusionPeriod {
 					// an ASG remains unavailable for a fixed period of time
 					continue
+				}
+			} else {
+				err := m.requestService.CancelRequests(asgRequests)
+				if err != nil {
+					return err
 				}
 			}
 
@@ -104,6 +114,7 @@ func (m *spotAvailabilityMonitor) updateRequestCache() error {
 	return nil
 }
 
+// AsgAvailability checks for a given ASG if it is available or not
 func (m *spotAvailabilityMonitor) AsgAvailability(name, iamInstanceProfile, instanceType string) bool {
 	asgStatus := m.asgStatus(name, iamInstanceProfile, instanceType)
 	return asgStatus.Available
@@ -125,7 +136,8 @@ func (m *spotAvailabilityMonitor) asgStatus(name, iamInstanceProfile, instanceTy
 			statusChangeTime:   time.Time{},
 		}
 
-		asgStatus.Available = m.requestStatus(*asgStatus)
+		asgRequests := m.requestCache.findRequests(asgStatus.IamInstanceProfile, asgStatus.InstanceType)
+		asgStatus.Available = m.requestsAllValid(asgRequests)
 
 		m.statusCache.add(castedName, asgStatus)
 	} else {
@@ -135,11 +147,9 @@ func (m *spotAvailabilityMonitor) asgStatus(name, iamInstanceProfile, instanceTy
 	return *asgStatus
 }
 
-// requestStatus checks for unwanted spot request states
+// requestsAllValid checks for unwanted spot request states
 // see https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-bid-status.html
-func (m *spotAvailabilityMonitor) requestStatus(status asgSpotStatus) bool {
-	asgRequests := m.requestCache.findRequests(status.IamInstanceProfile, status.InstanceType)
-
+func (m *spotAvailabilityMonitor) requestsAllValid(asgRequests []*api.SpotRequest) bool {
 	if len(asgRequests) > 0 {
 		for _, request := range asgRequests {
 			if request.State == api.AWSSpotRequestStateFailed {
@@ -224,15 +234,15 @@ func (c *spotRequestCache) refresh(requests []*api.SpotRequest) {
 }
 
 func (c *spotRequestCache) findRequests(iamInstanceProfile api.AWSIamInstanceProfile, instanceType api.AWSInstanceType) []*api.SpotRequest {
-	c.mux.RLock()
 	requests := make([]*api.SpotRequest, len(c.cache))
 
+	c.mux.RLock()
 	for _, request := range c.cache {
 		if iamInstanceProfile == request.InstanceProfile && instanceType == request.InstanceType {
 
 		}
 	}
-
 	c.mux.RUnlock()
+
 	return requests
 }

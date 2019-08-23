@@ -8,7 +8,8 @@ import (
 	"github.com/pkg/errors"
 )
 
-type AwsEC2SpotRequestLister interface {
+type AwsEC2SpotRequestManager interface {
+	CancelSpotInstanceRequests(input *ec2.CancelSpotInstanceRequestsInput) (*ec2.CancelSpotInstanceRequestsOutput, error)
 	DescribeSpotInstanceRequests(input *ec2.DescribeSpotInstanceRequestsInput) (*ec2.DescribeSpotInstanceRequestsOutput, error)
 }
 
@@ -21,14 +22,15 @@ type SpotRequest struct {
 	Status           AWSSpotRequestStatus
 }
 
-type SpotRequestService interface {
+type SpotRequestManager interface {
 	List() ([]*SpotRequest, error)
+	CancelRequests([]*SpotRequest) error
 }
 
-var _ SpotRequestService = &spotRequestService{}
+var _ SpotRequestManager = &spotRequestService{}
 
-// NewEC2SpotRequestService is the constructor of spotRequestService which is a wrapper for the AWS EC2 API
-func NewEC2SpotRequestService(awsEC2Service AwsEC2SpotRequestLister) *spotRequestService {
+// NewEC2SpotRequestManager is the constructor of spotRequestService which is a wrapper for the AWS EC2 API
+func NewEC2SpotRequestManager(awsEC2Service AwsEC2SpotRequestManager) *spotRequestService {
 	return &spotRequestService{
 		service:       awsEC2Service,
 		lastCheckTime: time.Time{},
@@ -36,8 +38,29 @@ func NewEC2SpotRequestService(awsEC2Service AwsEC2SpotRequestLister) *spotReques
 }
 
 type spotRequestService struct {
-	service       AwsEC2SpotRequestLister
+	service       AwsEC2SpotRequestManager
 	lastCheckTime time.Time
+}
+
+func (srs *spotRequestService) CancelRequests(requests []*SpotRequest) error {
+	ids := make([]*string, len(requests))
+
+	for _, request := range requests {
+		if request.State == AWSSpotRequestStateOpen {
+			ids = append(ids, aws.String(string(request.ID)))
+		}
+	}
+
+	options := &ec2.CancelSpotInstanceRequestsInput{
+		SpotInstanceRequestIds: ids,
+	}
+
+	_, err := srs.service.CancelSpotInstanceRequests(options)
+	if err != nil {
+		return errors.Wrap(err, "could not cancel spot requests")
+	}
+
+	return nil
 }
 
 func (srs *spotRequestService) List() ([]*SpotRequest, error) {
@@ -93,8 +116,4 @@ func (srs *spotRequestService) listArguments() *ec2.DescribeSpotInstanceRequests
 	}
 
 	return arguments
-}
-
-func (srs *spotRequestService) clusterNameFromRequest(request *ec2.SpotInstanceRequest) string {
-	return ""
 }
