@@ -1,3 +1,19 @@
+/*
+Copyright 2017 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package api
 
 import (
@@ -8,11 +24,13 @@ import (
 	"github.com/pkg/errors"
 )
 
+// AwsEC2SpotRequestManager wraps the necessary AWS API methods
 type AwsEC2SpotRequestManager interface {
 	CancelSpotInstanceRequests(input *ec2.CancelSpotInstanceRequestsInput) (*ec2.CancelSpotInstanceRequestsOutput, error)
 	DescribeSpotInstanceRequests(input *ec2.DescribeSpotInstanceRequestsInput) (*ec2.DescribeSpotInstanceRequestsOutput, error)
 }
 
+// SpotRequest provides all information necessary to assess spot ASG availability
 type SpotRequest struct {
 	ID               AWSSpotRequestID
 	InstanceProfile  AWSIamInstanceProfile
@@ -22,6 +40,7 @@ type SpotRequest struct {
 	Status           AWSSpotRequestStatus
 }
 
+// SpotRequestManager defines the interface to interact with spot requests
 type SpotRequestManager interface {
 	List() ([]*SpotRequest, error)
 	CancelRequests([]*SpotRequest) error
@@ -42,6 +61,7 @@ type spotRequestService struct {
 	lastCheckTime time.Time
 }
 
+// CancelRequests cancels all open spot requests from the provided list
 func (srs *spotRequestService) CancelRequests(requests []*SpotRequest) error {
 	ids := make([]*string, len(requests))
 
@@ -63,6 +83,7 @@ func (srs *spotRequestService) CancelRequests(requests []*SpotRequest) error {
 	return nil
 }
 
+// Lists returns all failed or open spot requests since the last listing
 func (srs *spotRequestService) List() ([]*SpotRequest, error) {
 	list := make([]*SpotRequest, 0)
 
