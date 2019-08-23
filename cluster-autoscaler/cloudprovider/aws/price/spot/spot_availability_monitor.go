@@ -68,7 +68,7 @@ type spotAvailabilityMonitor struct {
 
 // Run starts the monitor's check cycle
 func (m *spotAvailabilityMonitor) Run() {
-	klog.V(3).Info("spot availability monitoring started")
+	klog.Info("spot availability monitoring started")
 	// monitor ad infinitum.
 	for {
 		select {
@@ -78,7 +78,7 @@ func (m *spotAvailabilityMonitor) Run() {
 				if err != nil {
 					klog.Errorf("spot availability check roundtrip failed: %v", err)
 				} else {
-					klog.V(3).Info("successful spot availability check roundtrip")
+					klog.V(2).Info("successful spot availability check roundtrip")
 				}
 			}
 		}
@@ -106,12 +106,14 @@ func (m *spotAvailabilityMonitor) roundtrip() error {
 					continue
 				}
 			} else {
+				klog.V(2).Infof("spot ASG for type %v has been flagged unavailable for %v", asgStatus.InstanceType, m.exclusionPeriod)
 				err := m.requestService.CancelRequests(asgRequests)
 				if err != nil {
 					return err
 				}
 			}
 
+			klog.V(2).Infof("spot ASG for type %v as an availability state transition from %s to %s", asgStatus.InstanceType, asgStatus.Available, status)
 			m.statusCache.update(asgName, status)
 		}
 	}
@@ -169,6 +171,7 @@ func (m *spotAvailabilityMonitor) requestsAllValid(asgRequests []*api.SpotReques
 	if len(asgRequests) > 0 {
 		for _, request := range asgRequests {
 			if request.State == api.AWSSpotRequestStateFailed {
+				klog.V(4).Infof("spot request %v has invalid state %v", request.ID, request.State)
 				return false
 			}
 
@@ -180,6 +183,7 @@ func (m *spotAvailabilityMonitor) requestsAllValid(asgRequests []*api.SpotReques
 			case api.AWSSpotRequestStatusOversubscribed:
 				fallthrough
 			case api.AWSSpotRequestStatusPriceToLow:
+				klog.V(4).Infof("spot request %v has invalid status %v", request.ID, request.Status)
 				return false
 			}
 		}
