@@ -135,6 +135,8 @@ func (m *spotAvailabilityMonitor) asgStatus(name, iamInstanceProfile, instanceTy
 	return *asgStatus
 }
 
+// requestStatus checks for unwanted spot request states
+// see https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-bid-status.html
 func (m *spotAvailabilityMonitor) requestStatus(status asgSpotStatus) bool {
 	asgRequests := m.requestCache.findRequests(status.IamInstanceProfile, status.InstanceType)
 
