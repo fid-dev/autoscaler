@@ -82,7 +82,17 @@ func (d *shapeDescriptor) Price(asgName string) (price float64, err error) {
 	}
 
 	if lc.HasSpotMarkedBid {
-		asgAvailability := d.asgAvailabilityChecker.AsgAvailability(asg.Name, lc.IamInstanceProfile, lc.InstanceType)
+		asgAvailability := true
+		for _, availabilityZone := range asg.AvailabilityZones {
+			asgAvailability = d.asgAvailabilityChecker.AsgAvailability(
+				asg.Name, lc.IamInstanceProfile, availabilityZone, lc.InstanceType)
+
+			if asgAvailability == false {
+				// at least one AvailabilityZone ist not available,
+				// skip more checks
+				break
+			}
+		}
 
 		if asgAvailability == false {
 			// make sure this ASG will not be used
