@@ -26,8 +26,10 @@ import (
 
 // AsgAvailabilityChecker provides an interface to check for ASG availability
 type AsgAvailabilityChecker interface {
-	AsgAvailability(name, iamInstanceProfile, instanceType string) bool
+	AsgAvailability(name, iamInstanceProfile, availabilityZone, instanceType string) bool
 }
+
+var _ AsgAvailabilityChecker = &spotAvailabilityMonitor{}
 
 // NewSpotAvailabilityMonitor returns an instance of the spot ASG availability monitor
 func NewSpotAvailabilityMonitor(requestLister api.AwsEC2SpotRequestManager, checkInterval, exclusionPeriod time.Duration) *spotAvailabilityMonitor {
@@ -51,6 +53,7 @@ func NewSpotAvailabilityMonitor(requestLister api.AwsEC2SpotRequestManager, chec
 
 type asgSpotStatus struct {
 	AsgName            api.AWSAsgName
+	AvailabilityZone   api.AWSAvailabilityZone
 	IamInstanceProfile api.AWSIamInstanceProfile
 	InstanceType       api.AWSInstanceType
 	Available          bool
@@ -95,7 +98,7 @@ func (m *spotAvailabilityMonitor) roundtrip() error {
 
 	for _, asgName := range asgNames {
 		asgStatus := m.statusCache.get(asgName)
-		asgRequests := m.requestCache.findRequests(asgStatus.IamInstanceProfile, asgStatus.InstanceType)
+		asgRequests := m.requestCache.findRequests(asgStatus.AvailabilityZone, asgStatus.IamInstanceProfile, asgStatus.InstanceType)
 
 		status := m.requestsAllValid(asgRequests)
 
@@ -133,12 +136,12 @@ func (m *spotAvailabilityMonitor) updateRequestCache() error {
 }
 
 // AsgAvailability checks for a given ASG if it is available or not
-func (m *spotAvailabilityMonitor) AsgAvailability(name, iamInstanceProfile, instanceType string) bool {
-	asgStatus := m.asgStatus(name, iamInstanceProfile, instanceType)
+func (m *spotAvailabilityMonitor) AsgAvailability(name, iamInstanceProfile, availabilityZone, instanceType string) bool {
+	asgStatus := m.asgStatus(name, iamInstanceProfile, availabilityZone, instanceType)
 	return asgStatus.Available
 }
 
-func (m *spotAvailabilityMonitor) asgStatus(name, iamInstanceProfile, instanceType string) asgSpotStatus {
+func (m *spotAvailabilityMonitor) asgStatus(name, iamInstanceProfile, availabilityZone, instanceType string) asgSpotStatus {
 	castedName := api.AWSAsgName(name)
 
 	var asgStatus *asgSpotStatus
@@ -148,13 +151,14 @@ func (m *spotAvailabilityMonitor) asgStatus(name, iamInstanceProfile, instanceTy
 	if !exists {
 		asgStatus = &asgSpotStatus{
 			AsgName:            castedName,
+			AvailabilityZone:   api.AWSAvailabilityZone(availabilityZone),
 			IamInstanceProfile: api.AWSIamInstanceProfile(iamInstanceProfile),
 			InstanceType:       api.AWSInstanceType(instanceType),
 			Available:          true,
 			statusChangeTime:   time.Time{},
 		}
 
-		asgRequests := m.requestCache.findRequests(asgStatus.IamInstanceProfile, asgStatus.InstanceType)
+		asgRequests := m.requestCache.findRequests(asgStatus.AvailabilityZone, asgStatus.IamInstanceProfile, asgStatus.InstanceType)
 		asgStatus.Available = m.requestsAllValid(asgRequests)
 
 		m.statusCache.add(castedName, asgStatus)
@@ -253,13 +257,13 @@ func (c *spotRequestCache) refresh(requests []*api.SpotRequest) {
 	c.mux.Unlock()
 }
 
-func (c *spotRequestCache) findRequests(iamInstanceProfile api.AWSIamInstanceProfile, instanceType api.AWSInstanceType) []*api.SpotRequest {
+func (c *spotRequestCache) findRequests(availabilityZone api.AWSAvailabilityZone, iamInstanceProfile api.AWSIamInstanceProfile, instanceType api.AWSInstanceType) []*api.SpotRequest {
 	requests := make([]*api.SpotRequest, len(c.cache))
 
 	c.mux.RLock()
 	for _, request := range c.cache {
-		if iamInstanceProfile == request.InstanceProfile && instanceType == request.InstanceType {
-
+		if availabilityZone == request.AvailabilityZone && iamInstanceProfile == request.InstanceProfile && instanceType == request.InstanceType {
+			requests = append(requests, request)
 		}
 	}
 	c.mux.RUnlock()
