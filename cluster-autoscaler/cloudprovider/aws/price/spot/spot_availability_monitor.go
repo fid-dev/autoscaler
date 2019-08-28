@@ -162,6 +162,7 @@ func (m *spotAvailabilityMonitor) asgStatus(name, iamInstanceProfile, availabili
 		asgStatus.Available = m.requestsAllValid(asgRequests)
 
 		m.statusCache.add(castedName, asgStatus)
+		klog.V(4).Infof("added spot ASG availability status (%v) for group %s", asgStatus.Available, name)
 	} else {
 		asgStatus = m.statusCache.get(castedName)
 	}
