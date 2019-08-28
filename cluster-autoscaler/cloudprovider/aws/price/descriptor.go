@@ -28,6 +28,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/aws/api"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/aws/price/ondemand"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/aws/price/spot"
+	"k8s.io/klog"
 )
 
 // ShapeDescriptor describes an interface to appraise an instance price of any shape
@@ -86,10 +87,12 @@ func (d *shapeDescriptor) Price(asgName string) (price float64, err error) {
 		for _, availabilityZone := range asg.AvailabilityZones {
 			asgAvailability = d.asgAvailabilityChecker.AsgAvailability(
 				asg.Name, lc.IamInstanceProfile, availabilityZone, lc.InstanceType)
+			klog.V(5).Infof("spot ASG %s availability: %v", asg.Name, asgAvailability)
 
 			if asgAvailability == false {
 				// at least one AvailabilityZone ist not available,
 				// make sure this ASG will not be used
+				klog.V(5).Infof("disabling spot ASG %s", asg.Name)
 				return float64(1000000000), nil
 			}
 		}
