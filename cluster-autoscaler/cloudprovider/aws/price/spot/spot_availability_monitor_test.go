@@ -881,14 +881,14 @@ idloop:
 			if aws.StringValue(id) == aws.StringValue(request.SpotInstanceRequestId) {
 				canceledIds = append(canceledIds, &ec2.CancelledSpotInstanceRequest{
 					SpotInstanceRequestId: request.SpotInstanceRequestId,
-					State: request.State,
+					State:                 request.State,
 				})
 				request.State = aws.String("cancelled")
 				continue idloop
 			}
 		}
 
-		return nil, errors.New(fmt.Sprintf("the spot instance request ID '%s' does not exist", aws.StringValue(id)))
+		return nil, fmt.Errorf("the spot instance request ID '%s' does not exist", aws.StringValue(id))
 	}
 
 	return &ec2.CancelSpotInstanceRequestsOutput{CancelledSpotInstanceRequests: canceledIds}, nil

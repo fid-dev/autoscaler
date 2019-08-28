@@ -17,7 +17,6 @@ limitations under the License.
 package spot
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -218,7 +217,7 @@ func (c *asgStatusCache) exists(asgName api.AWSAsgName) bool {
 }
 
 func (c *asgStatusCache) get(asgName api.AWSAsgName) *asgSpotStatus {
-	var asgStatus *asgSpotStatus = nil
+	var asgStatus *asgSpotStatus
 
 	c.mux.RLock()
 	if actualStatus, exists := c.cache[asgName]; exists {
@@ -240,12 +239,10 @@ func (c *asgStatusCache) add(asgName api.AWSAsgName, status *asgSpotStatus) {
 
 func (c *asgStatusCache) update(asgName api.AWSAsgName, status bool) {
 	c.mux.Lock()
-	fmt.Println("update - locking for", asgName)
 	if _, exists := c.cache[asgName]; exists {
 		c.cache[asgName].Available = status
 		c.cache[asgName].statusChangeTime = time.Now()
 	}
-	fmt.Println("update - unlocking for", asgName)
 	c.mux.Unlock()
 }
 

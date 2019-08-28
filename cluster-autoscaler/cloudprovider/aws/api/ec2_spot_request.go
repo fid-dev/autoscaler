@@ -26,7 +26,9 @@ import (
 )
 
 const (
-	InputTimeFilter  = "create-time"
+	// InputTimeFilter request create time filter key for spot request listing
+	InputTimeFilter = "create-time"
+	// InputStateFilter request state filter key for spot request listing
 	InputStateFilter = "state"
 )
 
