@@ -130,12 +130,13 @@ func (srs *spotRequestService) convertAwsSpotRequest(request *ec2.SpotInstanceRe
 func (srs *spotRequestService) listArguments() *ec2.DescribeSpotInstanceRequestsInput {
 	arguments := &ec2.DescribeSpotInstanceRequestsInput{
 		Filters: []*ec2.Filter{
-			{
-				Name: aws.String(InputTimeFilter),
-				Values: []*string{
-					aws.String(srs.lastCheckTime.Format(time.RFC3339)),
-				},
-			},
+			// TODO: determine why create-time does not work
+			//{
+			//	Name: aws.String(InputTimeFilter),
+			//	Values: []*string{
+			//		aws.String(srs.lastCheckTime.Format(time.RFC3339)),
+			//	},
+			//},
 			{
 				Name: aws.String(InputStateFilter),
 				Values: []*string{

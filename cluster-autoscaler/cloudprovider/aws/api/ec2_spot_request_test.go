@@ -56,7 +56,16 @@ func TestSpotRequestManager_List(t *testing.T) {
 					"capacity-not-available", "123",
 					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Hour)),
 			},
-			expected: []*SpotRequest{},
+			expected: []*SpotRequest{
+				{
+					ID:               "1",
+					InstanceType:     "m4.2xlarge",
+					InstanceProfile:  "123",
+					AvailabilityZone: "eu-west-1a",
+					State:            "open",
+					Status:           "capacity-not-available",
+				},
+			},
 		},
 		{
 			name:          "no request has the requested state: returns empty list",
@@ -77,7 +86,7 @@ func TestSpotRequestManager_List(t *testing.T) {
 					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*35)),
 				newSpotInstanceRequestInstance("13", "open",
 					"active", "123",
-					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*30)),
+					"m4.2xlarge", "eu-west-1c", fluxCompensatorAWS(time.Minute*30)),
 				newSpotInstanceRequestInstance("14", "failed",
 					"bad-parameters", "123",
 					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*5)),
@@ -86,6 +95,14 @@ func TestSpotRequestManager_List(t *testing.T) {
 					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute)),
 			},
 			expected: []*SpotRequest{
+				{
+					ID:               "13",
+					InstanceType:     "m4.2xlarge",
+					InstanceProfile:  "123",
+					AvailabilityZone: "eu-west-1c",
+					State:            "open",
+					Status:           "active",
+				},
 				{
 					ID:               "14",
 					InstanceType:     "m4.2xlarge",
@@ -290,7 +307,7 @@ idloop:
 			if aws.StringValue(id) == aws.StringValue(request.SpotInstanceRequestId) {
 				canceledIds = append(canceledIds, &ec2.CancelledSpotInstanceRequest{
 					SpotInstanceRequestId: request.SpotInstanceRequestId,
-					State:                 request.State,
+					State: request.State,
 				})
 				request.State = aws.String("cancelled")
 				continue idloop
