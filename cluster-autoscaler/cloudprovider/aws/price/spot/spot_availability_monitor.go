@@ -17,6 +17,7 @@ limitations under the License.
 package spot
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -116,7 +117,7 @@ func (m *spotAvailabilityMonitor) roundtrip() error {
 				}
 			}
 
-			klog.V(2).Infof("spot ASG for type %v as an availability state transition from %s to %s", asgStatus.InstanceType, asgStatus.Available, status)
+			klog.V(2).Infof("spot ASG for type %v as an availability state transition from %v to %v", asgStatus.InstanceType, asgStatus.Available, status)
 			m.statusCache.update(asgName, status)
 		}
 	}
@@ -217,30 +218,34 @@ func (c *asgStatusCache) exists(asgName api.AWSAsgName) bool {
 }
 
 func (c *asgStatusCache) get(asgName api.AWSAsgName) *asgSpotStatus {
+	var asgStatus *asgSpotStatus = nil
+
 	c.mux.RLock()
-	if asgStatus, exists := c.cache[asgName]; exists {
-		return asgStatus
+	if actualStatus, exists := c.cache[asgName]; exists {
+		asgStatus = actualStatus
 	}
 	c.mux.RUnlock()
 
-	return nil
+	return asgStatus
 }
 
 func (c *asgStatusCache) add(asgName api.AWSAsgName, status *asgSpotStatus) {
 	c.mux.Lock()
 	if _, exists := c.cache[asgName]; !exists {
 		c.asgNames = append(c.asgNames, asgName)
+		c.cache[asgName] = status
 	}
-	c.cache[asgName] = status
 	c.mux.Unlock()
 }
 
 func (c *asgStatusCache) update(asgName api.AWSAsgName, status bool) {
 	c.mux.Lock()
+	fmt.Println("update - locking for", asgName)
 	if _, exists := c.cache[asgName]; exists {
 		c.cache[asgName].Available = status
 		c.cache[asgName].statusChangeTime = time.Now()
 	}
+	fmt.Println("update - unlocking for", asgName)
 	c.mux.Unlock()
 }
 
@@ -252,13 +257,15 @@ type spotRequestCache struct {
 
 func (c *spotRequestCache) refresh(requests []*api.SpotRequest) {
 	c.mux.Lock()
-	c.cache = requests
-	c.createTime = time.Now()
+	if len(requests) > 0 {
+		c.cache = requests
+		c.createTime = time.Now()
+	}
 	c.mux.Unlock()
 }
 
 func (c *spotRequestCache) findRequests(availabilityZone api.AWSAvailabilityZone, iamInstanceProfile api.AWSIamInstanceProfile, instanceType api.AWSInstanceType) []*api.SpotRequest {
-	requests := make([]*api.SpotRequest, len(c.cache))
+	requests := make([]*api.SpotRequest, 0, len(c.cache))
 
 	c.mux.RLock()
 	for _, request := range c.cache {

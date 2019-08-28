@@ -18,6 +18,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ func TestSpotRequestManager_List(t *testing.T) {
 		name          string
 		requests      []*ec2.SpotInstanceRequest
 		expected      []*SpotRequest
+		lastCheckTime time.Time
 		expectedError string
 		error         string
 	}{
@@ -38,7 +40,7 @@ func TestSpotRequestManager_List(t *testing.T) {
 			name:          "error fetching list: handle error",
 			requests:      []*ec2.SpotInstanceRequest{},
 			expected:      []*SpotRequest{},
-			expectedError: "",
+			expectedError: "could not retrieve AWS Spot Request list: AWS died",
 			error:         "AWS died",
 		},
 		{
@@ -47,21 +49,70 @@ func TestSpotRequestManager_List(t *testing.T) {
 			expected: []*SpotRequest{},
 		},
 		{
-			name: "no request is young enough: returns empty list",
+			name:          "no request is young enough: returns empty list",
+			lastCheckTime: time.Now(),
 			requests: []*ec2.SpotInstanceRequest{
-				newSpotInstanceRequestInstance("1", "open", "capacity-not-available",
-					"123", "m4.2xlarge", "eu-west-1a", &time.Time{}),
+				newSpotInstanceRequestInstance("1", "open",
+					"capacity-not-available", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Hour)),
 			},
 			expected: []*SpotRequest{},
+		},
+		{
+			name:          "no request has the requested state: returns empty list",
+			lastCheckTime: time.Now(),
+			requests: []*ec2.SpotInstanceRequest{
+				newSpotInstanceRequestInstance("1", "fulfilled",
+					"capacity-not-available", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Hour)),
+			},
+			expected: []*SpotRequest{},
+		},
+		{
+			name:          "multiple requests found: returns filtered list",
+			lastCheckTime: fluxCompensator(time.Minute * 10),
+			requests: []*ec2.SpotInstanceRequest{
+				newSpotInstanceRequestInstance("12", "fulfilled",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*35)),
+				newSpotInstanceRequestInstance("13", "open",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*30)),
+				newSpotInstanceRequestInstance("14", "failed",
+					"bad-parameters", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*5)),
+				newSpotInstanceRequestInstance("15", "open",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute)),
+			},
+			expected: []*SpotRequest{
+				{
+					ID:               "14",
+					InstanceType:     "m4.2xlarge",
+					InstanceProfile:  "123",
+					AvailabilityZone: "eu-west-1a",
+					State:            "failed",
+					Status:           "bad-parameters",
+				},
+				{
+					ID:               "15",
+					InstanceType:     "m4.2xlarge",
+					InstanceProfile:  "123",
+					AvailabilityZone: "eu-west-1a",
+					State:            "open",
+					Status:           "active",
+				},
+			},
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			mock := NewAwsEC2SpotRequestManagerMock(c.requests)
+			mock := newAwsEC2SpotRequestManagerMock(c.requests)
 			mock.setError(c.error)
 
 			service := NewEC2SpotRequestManager(mock)
+			service.lastCheckTime = c.lastCheckTime
 			list, err := service.List()
 
 			if len(c.error) > 0 {
@@ -83,9 +134,137 @@ func TestSpotRequestManager_List(t *testing.T) {
 	}
 }
 
+func TestSpotRequestManager_CancelRequests(t *testing.T) {
+	cases := []struct {
+		name          string
+		awsRequests   []*ec2.SpotInstanceRequest
+		requests      []*SpotRequest
+		expectedError string
+		error         string
+	}{
+		{
+			name:          "error cancelling requests: handle error",
+			awsRequests:   []*ec2.SpotInstanceRequest{},
+			requests:      []*SpotRequest{},
+			expectedError: "could not cancel spot requests: AWS died",
+			error:         "AWS died",
+		},
+		{
+			// used CLI to test API: aws ec2 --region=eu-west-1 cancel-spot-instance-requests --spot-instance-request-ids ""
+			name:          "empty request list provided: return error",
+			awsRequests:   []*ec2.SpotInstanceRequest{},
+			requests:      []*SpotRequest{},
+			expectedError: "could not cancel spot requests: the request must contain the parameter SpotInstanceRequestId",
+			error:         "the request must contain the parameter SpotInstanceRequestId",
+		},
+		{
+			// used CLI to test API: aws ec2 --region=eu-west-1 cancel-spot-instance-requests --spot-instance-request-ids "sir-n29rnope"
+			name:          "unknown spot request id: return error",
+			awsRequests:   []*ec2.SpotInstanceRequest{},
+			requests:      []*SpotRequest{},
+			expectedError: "could not cancel spot requests: the spot instance request ID 'sir-n29rnope' does not exist",
+			error:         "the spot instance request ID 'sir-n29rnope' does not exist",
+		},
+		{
+			// used CLI to test API: aws ec2 --region=eu-west-1 cancel-spot-instance-requests --spot-instance-request-ids "sir-n29rnope" "<some-known-id>"
+			name: "mixed known and unknown request ids: returns error",
+			awsRequests: []*ec2.SpotInstanceRequest{
+				newSpotInstanceRequestInstance("12", "fulfilled",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*35)),
+				newSpotInstanceRequestInstance("13", "open",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*30)),
+				newSpotInstanceRequestInstance("14", "failed",
+					"bad-parameters", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*5)),
+				newSpotInstanceRequestInstance("15", "open",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute)),
+			},
+			requests: []*SpotRequest{
+				{
+					ID:               "14",
+					InstanceType:     "m4.2xlarge",
+					InstanceProfile:  "123",
+					AvailabilityZone: "eu-west-1a",
+					State:            "failed",
+					Status:           "bad-parameters",
+				},
+				{
+					ID:               "unknown",
+					InstanceType:     "m4.2xlarge",
+					InstanceProfile:  "123",
+					AvailabilityZone: "eu-west-1a",
+					State:            "open",
+					Status:           "active",
+				},
+			},
+			expectedError: "could not cancel spot requests: the spot instance request ID 'sir-n29rnope' does not exist",
+			error:         "the spot instance request ID 'sir-n29rnope' does not exist",
+		},
+		{
+			// used CLI to test API: aws ec2 --region=eu-west-1 cancel-spot-instance-requests --spot-instance-request-ids "<some-known-id>"
+			name: "only known spot request ids provided: no error",
+			awsRequests: []*ec2.SpotInstanceRequest{
+				newSpotInstanceRequestInstance("12", "fulfilled",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*35)),
+				newSpotInstanceRequestInstance("13", "open",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*30)),
+				newSpotInstanceRequestInstance("14", "failed",
+					"bad-parameters", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*5)),
+				newSpotInstanceRequestInstance("15", "open",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute)),
+			},
+			requests: []*SpotRequest{
+				{
+					ID:               "14",
+					InstanceType:     "m4.2xlarge",
+					InstanceProfile:  "123",
+					AvailabilityZone: "eu-west-1a",
+					State:            "failed",
+					Status:           "bad-parameters",
+				},
+				{
+					ID:               "15",
+					InstanceType:     "m4.2xlarge",
+					InstanceProfile:  "123",
+					AvailabilityZone: "eu-west-1a",
+					State:            "open",
+					Status:           "active",
+				},
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			mock := newAwsEC2SpotRequestManagerMock(c.awsRequests)
+			mock.setError(c.error)
+
+			service := NewEC2SpotRequestManager(mock)
+			err := service.CancelRequests(c.requests)
+
+			if len(c.error) > 0 {
+				assert.NotNil(t, err, c.name, "awaits an error")
+
+				if err != nil {
+					assert.Equal(t, c.expectedError, err.Error(), c.name, "unexpected error")
+				}
+			} else {
+				assert.Nil(t, err, c.name, "no error should have append")
+			}
+		})
+	}
+}
+
 var _ AwsEC2SpotRequestManager = &awsEC2SpotRequestManagerMock{}
 
-func NewAwsEC2SpotRequestManagerMock(requests []*ec2.SpotInstanceRequest) *awsEC2SpotRequestManagerMock {
+func newAwsEC2SpotRequestManagerMock(requests []*ec2.SpotInstanceRequest) *awsEC2SpotRequestManagerMock {
 	return &awsEC2SpotRequestManagerMock{requests, ""}
 }
 
@@ -105,16 +284,20 @@ func (m *awsEC2SpotRequestManagerMock) CancelSpotInstanceRequests(input *ec2.Can
 
 	canceledIds := make([]*ec2.CancelledSpotInstanceRequest, len(m.requests))
 
+idloop:
 	for _, id := range input.SpotInstanceRequestIds {
 		for _, request := range m.requests {
 			if aws.StringValue(id) == aws.StringValue(request.SpotInstanceRequestId) {
 				canceledIds = append(canceledIds, &ec2.CancelledSpotInstanceRequest{
 					SpotInstanceRequestId: request.SpotInstanceRequestId,
-					State:                 request.State,
+					State: request.State,
 				})
 				request.State = aws.String("cancelled")
+				continue idloop
 			}
 		}
+
+		return nil, errors.New(fmt.Sprintf("the spot instance request ID '%s' does not exist", aws.StringValue(id)))
 	}
 
 	return &ec2.CancelSpotInstanceRequestsOutput{CancelledSpotInstanceRequests: canceledIds}, nil
@@ -125,27 +308,32 @@ func (m *awsEC2SpotRequestManagerMock) DescribeSpotInstanceRequests(input *ec2.D
 		return nil, errors.New(m.error)
 	}
 
+	var err error
 	startTime := time.Time{}
 	searchedStates := make([]*string, 0)
 
 	for _, filter := range input.Filters {
 		switch aws.StringValue(filter.Name) {
-		case "valid-from":
-			startTime, _ = time.Parse(aws.StringValue(filter.Values[0]), time.RFC3339)
-		case "state":
+		case InputTimeFilter:
+			startTime, err = time.Parse(time.RFC3339, aws.StringValue(filter.Values[0]))
+			if err != nil {
+				startTime = time.Time{}
+			}
+		case InputStateFilter:
 			for _, state := range filter.Values {
 				searchedStates = append(searchedStates, state)
 			}
 		}
 	}
 
-	requests := make([]*ec2.SpotInstanceRequest, len(m.requests))
+	requests := make([]*ec2.SpotInstanceRequest, 0)
 
 	for _, request := range m.requests {
 		if aws.TimeValue(request.CreateTime).After(startTime) {
 			for _, state := range searchedStates {
-				if request.State == state {
+				if aws.StringValue(request.State) == aws.StringValue(state) {
 					requests = append(requests, request)
+					break
 				}
 			}
 		}
@@ -174,4 +362,13 @@ func newSpotInstanceRequestInstance(id, state, status, iamInstanceProfile, insta
 		},
 		CreateTime: created,
 	}
+}
+
+func fluxCompensatorAWS(travelRange time.Duration) *time.Time {
+	past := fluxCompensator(travelRange)
+	return &past
+}
+
+func fluxCompensator(travelRange time.Duration) time.Time {
+	return time.Now().Add(-1 * travelRange)
 }

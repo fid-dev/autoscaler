@@ -96,7 +96,7 @@ func (d *shapeDescriptor) Price(asgName string) (price float64, err error) {
 
 		if asgAvailability == false {
 			// make sure this ASG will not be used
-			return float64(1000000), nil
+			return float64(1000000000), nil
 		}
 
 		return d.spot.Price(lc.InstanceType, lc.SpotPrice, asg.AvailabilityZones...)

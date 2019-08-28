@@ -22,6 +22,12 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/pkg/errors"
+	"k8s.io/klog"
+)
+
+const (
+	InputTimeFilter  = "create-time"
+	InputStateFilter = "state"
 )
 
 // AwsEC2SpotRequestManager wraps the necessary AWS API methods
@@ -63,7 +69,7 @@ type spotRequestService struct {
 
 // CancelRequests cancels all open spot requests from the provided list
 func (srs *spotRequestService) CancelRequests(requests []*SpotRequest) error {
-	ids := make([]*string, len(requests))
+	ids := make([]*string, 0)
 
 	for _, request := range requests {
 		if request.State == AWSSpotRequestStateOpen {
@@ -79,6 +85,7 @@ func (srs *spotRequestService) CancelRequests(requests []*SpotRequest) error {
 	if err != nil {
 		return errors.Wrap(err, "could not cancel spot requests")
 	}
+	klog.V(5).Infof("canceled %d spot requests from AWS: %v", len(ids), ids)
 
 	return nil
 }
@@ -99,6 +106,7 @@ func (srs *spotRequestService) List() ([]*SpotRequest, error) {
 		list = append(list, converted)
 	}
 
+	klog.V(5).Infof("retrieved %d spot requests from AWS", len(list))
 	srs.lastCheckTime = time.Now()
 
 	return list, nil
@@ -121,13 +129,13 @@ func (srs *spotRequestService) listArguments() *ec2.DescribeSpotInstanceRequests
 	arguments := &ec2.DescribeSpotInstanceRequestsInput{
 		Filters: []*ec2.Filter{
 			{
-				Name: aws.String("valid-from"),
+				Name: aws.String(InputTimeFilter),
 				Values: []*string{
 					aws.String(srs.lastCheckTime.Format(time.RFC3339)),
 				},
 			},
 			{
-				Name: aws.String("state"),
+				Name: aws.String(InputStateFilter),
 				Values: []*string{
 					aws.String("open"),
 					aws.String("failed"),
