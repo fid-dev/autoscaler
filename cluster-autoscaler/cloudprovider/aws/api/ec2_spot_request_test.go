@@ -56,16 +56,7 @@ func TestSpotRequestManager_List(t *testing.T) {
 					"capacity-not-available", "123",
 					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Hour)),
 			},
-			expected: []*SpotRequest{
-				{
-					ID:               "1",
-					InstanceType:     "m4.2xlarge",
-					InstanceProfile:  "123",
-					AvailabilityZone: "eu-west-1a",
-					State:            "open",
-					Status:           "capacity-not-available",
-				},
-			},
+			expected: []*SpotRequest{},
 		},
 		{
 			name:          "no request has the requested state: returns empty list",
@@ -95,14 +86,6 @@ func TestSpotRequestManager_List(t *testing.T) {
 					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute)),
 			},
 			expected: []*SpotRequest{
-				{
-					ID:               "13",
-					InstanceType:     "m4.2xlarge",
-					InstanceProfile:  "123",
-					AvailabilityZone: "eu-west-1c",
-					State:            "open",
-					Status:           "active",
-				},
 				{
 					ID:               "14",
 					InstanceType:     "m4.2xlarge",
@@ -325,17 +308,11 @@ func (m *awsEC2SpotRequestManagerMock) DescribeSpotInstanceRequests(input *ec2.D
 		return nil, errors.New(m.error)
 	}
 
-	var err error
 	startTime := time.Time{}
 	searchedStates := make([]*string, 0)
 
 	for _, filter := range input.Filters {
 		switch aws.StringValue(filter.Name) {
-		case InputTimeFilter:
-			startTime, err = time.Parse(time.RFC3339, aws.StringValue(filter.Values[0]))
-			if err != nil {
-				startTime = time.Time{}
-			}
 		case InputStateFilter:
 			for _, state := range filter.Values {
 				searchedStates = append(searchedStates, state)
@@ -375,7 +352,8 @@ func newSpotInstanceRequestInstance(id, state, status, iamInstanceProfile, insta
 		},
 		State: aws.String(state),
 		Status: &ec2.SpotInstanceStatus{
-			Code: aws.String(status),
+			Code:       aws.String(status),
+			UpdateTime: created,
 		},
 		CreateTime: created,
 	}

@@ -98,14 +98,17 @@ func (m *spotAvailabilityMonitor) roundtrip() error {
 
 	for _, asgName := range asgNames {
 		asgStatus := m.statusCache.get(asgName)
+
 		asgRequests := m.requestCache.findRequests(asgStatus.AvailabilityZone, asgStatus.IamInstanceProfile, asgStatus.InstanceType)
 
 		status := m.requestsAllValid(asgRequests)
 
 		if asgStatus.Available != status {
 			if status == true {
-				if time.Now().Sub(asgStatus.statusChangeTime) < m.exclusionPeriod {
+				restExclusionTime := m.calculateRestExclusionTime(asgStatus.statusChangeTime)
+				if restExclusionTime > 0 {
 					// an ASG remains unavailable for a fixed period of time
+					klog.V(2).Infof("spot ASG for type %v is flagged unavailable for another %v", asgStatus.InstanceType, restExclusionTime)
 					continue
 				}
 			} else {
@@ -122,6 +125,10 @@ func (m *spotAvailabilityMonitor) roundtrip() error {
 	}
 
 	return nil
+}
+
+func (m *spotAvailabilityMonitor) calculateRestExclusionTime(exclusionStart time.Time) time.Duration {
+	return m.exclusionPeriod - time.Now().Sub(exclusionStart)
 }
 
 func (m *spotAvailabilityMonitor) updateRequestCache() error {
@@ -170,7 +177,8 @@ func (m *spotAvailabilityMonitor) asgStatus(name, iamInstanceProfile, availabili
 	return *asgStatus
 }
 
-// requestsAllValid checks for unwanted spot request states
+// requestsAllValid checks for unwanted spot request states,
+// if no requests are provided, the response is "true"
 // see https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-bid-status.html
 func (m *spotAvailabilityMonitor) requestsAllValid(asgRequests []*api.SpotRequest) bool {
 	if len(asgRequests) > 0 {

@@ -853,6 +853,206 @@ func TestSpotAvailabilityMonitor_updateRequestCache(t *testing.T) {
 	}
 }
 
+func TestSpotAvailabilityMonitor_roundtrip(t *testing.T) {
+	statusCreateTime := fluxCompensator(time.Hour)
+	cases := []struct {
+		name            string
+		awsSpotRequests []*ec2.SpotInstanceRequest
+		awsStatusCache  map[api.AWSAsgName]*asgSpotStatus
+		expectedCache   map[api.AWSAsgName]*asgSpotStatus
+		expectedError   string
+		error           string
+	}{
+		{
+			name:            "error raised while using AWS APIs: return the error",
+			awsSpotRequests: []*ec2.SpotInstanceRequest{},
+			awsStatusCache:  map[api.AWSAsgName]*asgSpotStatus{},
+			expectedCache:   map[api.AWSAsgName]*asgSpotStatus{},
+			expectedError:   "could not retrieve AWS Spot Request list: AWS Died",
+			error:           "AWS Died",
+		},
+		{
+			name: "no ASG status entries: no changes, only spot request cache update",
+			awsSpotRequests: []*ec2.SpotInstanceRequest{
+				newSpotInstanceRequestInstance("12", "fulfilled",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*35)),
+				newSpotInstanceRequestInstance("13", "open",
+					"active", "222",
+					"m4.2xlarge", "eu-west-1c", fluxCompensatorAWS(time.Minute*30)),
+				newSpotInstanceRequestInstance("14", "failed",
+					"bad-parameters", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*5)),
+				newSpotInstanceRequestInstance("15", "open",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute)),
+			},
+			awsStatusCache: map[api.AWSAsgName]*asgSpotStatus{},
+			expectedCache:  map[api.AWSAsgName]*asgSpotStatus{},
+		},
+		{
+			name: "valid spot request for known available ASG found: no change",
+			awsSpotRequests: []*ec2.SpotInstanceRequest{
+				newSpotInstanceRequestInstance("12", "fulfilled",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*35)),
+				newSpotInstanceRequestInstance("13", "open",
+					"active", "222",
+					"m4.2xlarge", "eu-west-1c", fluxCompensatorAWS(time.Minute*30)),
+				newSpotInstanceRequestInstance("14", "failed",
+					"bad-parameters", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*5)),
+				newSpotInstanceRequestInstance("15", "open",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute)),
+			},
+			awsStatusCache: map[api.AWSAsgName]*asgSpotStatus{
+				"myasg": {
+					AsgName:            "myasg",
+					AvailabilityZone:   "eu-west-1c",
+					IamInstanceProfile: "222",
+					InstanceType:       "m4.2xlarge",
+					Available:          true,
+					statusChangeTime:   statusCreateTime,
+				},
+			},
+			expectedCache: map[api.AWSAsgName]*asgSpotStatus{
+				"myasg": {
+					AsgName:            "myasg",
+					AvailabilityZone:   "eu-west-1c",
+					IamInstanceProfile: "222",
+					InstanceType:       "m4.2xlarge",
+					Available:          true,
+					statusChangeTime:   statusCreateTime,
+				},
+			},
+		},
+		{
+			name: "invalid spot request for known available ASG found: ASG status changes to unavailable",
+			awsSpotRequests: []*ec2.SpotInstanceRequest{
+				newSpotInstanceRequestInstance("12", "fulfilled",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*35)),
+				newSpotInstanceRequestInstance("13", "open",
+					string(api.AWSSpotRequestStatusNotAvailable), "222",
+					"m4.2xlarge", "eu-west-1c", fluxCompensatorAWS(time.Minute*30)),
+				newSpotInstanceRequestInstance("14", "failed",
+					"bad-parameters", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute*5)),
+				newSpotInstanceRequestInstance("15", "open",
+					"active", "123",
+					"m4.2xlarge", "eu-west-1a", fluxCompensatorAWS(time.Minute)),
+			},
+			awsStatusCache: map[api.AWSAsgName]*asgSpotStatus{
+				"myasg": {
+					AsgName:            "myasg",
+					AvailabilityZone:   "eu-west-1c",
+					IamInstanceProfile: "222",
+					InstanceType:       "m4.2xlarge",
+					Available:          true,
+					statusChangeTime:   statusCreateTime,
+				},
+			},
+			expectedCache: map[api.AWSAsgName]*asgSpotStatus{
+				"myasg": {
+					AsgName:            "myasg",
+					AvailabilityZone:   "eu-west-1c",
+					IamInstanceProfile: "222",
+					InstanceType:       "m4.2xlarge",
+					Available:          false,
+					statusChangeTime:   statusCreateTime,
+				},
+			},
+		},
+		{
+			name:            "unavailable spot ASG gets a 'true' status but is still in the exclusion period: ASG stays unavailable",
+			awsSpotRequests: []*ec2.SpotInstanceRequest{},
+			awsStatusCache: map[api.AWSAsgName]*asgSpotStatus{
+				"myasg": {
+					AsgName:            "myasg",
+					AvailabilityZone:   "eu-west-1c",
+					IamInstanceProfile: "222",
+					InstanceType:       "m4.2xlarge",
+					Available:          false,
+					statusChangeTime:   fluxCompensator(time.Minute * 30),
+				},
+			},
+			expectedCache: map[api.AWSAsgName]*asgSpotStatus{
+				"myasg": {
+					AsgName:            "myasg",
+					AvailabilityZone:   "eu-west-1c",
+					IamInstanceProfile: "222",
+					InstanceType:       "m4.2xlarge",
+					Available:          false,
+				},
+			},
+		},
+		{
+			name:            "unavailable spot ASG gets a 'true' status and is out of the exclusion period: ASG becomes available",
+			awsSpotRequests: []*ec2.SpotInstanceRequest{},
+			awsStatusCache: map[api.AWSAsgName]*asgSpotStatus{
+				"myasg": {
+					AsgName:            "myasg",
+					AvailabilityZone:   "eu-west-1c",
+					IamInstanceProfile: "222",
+					InstanceType:       "m4.2xlarge",
+					Available:          false,
+					statusChangeTime:   fluxCompensator(time.Minute * 90),
+				},
+			},
+			expectedCache: map[api.AWSAsgName]*asgSpotStatus{
+				"myasg": {
+					AsgName:            "myasg",
+					AvailabilityZone:   "eu-west-1c",
+					IamInstanceProfile: "222",
+					InstanceType:       "m4.2xlarge",
+					Available:          true,
+				},
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			mock := newAwsEC2SpotRequestManagerMock(c.awsSpotRequests)
+			mock.setError(c.error)
+
+			asgNames := make([]api.AWSAsgName, 0)
+			for _, status := range c.awsStatusCache {
+				asgNames = append(asgNames, status.AsgName)
+			}
+
+			monitor := NewSpotAvailabilityMonitor(mock, time.Minute, time.Hour)
+			monitor.statusCache.asgNames = asgNames
+			monitor.statusCache.cache = c.awsStatusCache
+
+			err := monitor.roundtrip()
+
+			if len(c.error) > 0 {
+				assert.NotNil(t, err, c.name, "awaits an error")
+
+				if err != nil {
+					assert.Equal(t, c.expectedError, err.Error(), c.name, "unexpected error")
+				}
+			} else {
+				assert.Nil(t, err, c.name, "no error should have append")
+				for _, expectedEntry := range c.expectedCache {
+					entry := monitor.statusCache.get(expectedEntry.AsgName)
+					assert.NotNil(t, entry, c.name, "ASG status should be known for", expectedEntry.AsgName)
+
+					if entry != nil {
+						assert.Equal(t, expectedEntry.AsgName, entry.AsgName, c.name, "unexpected ASG name")
+						assert.Equal(t, expectedEntry.AvailabilityZone, entry.AvailabilityZone, c.name, "unexpected Availability Zone")
+						assert.Equal(t, expectedEntry.IamInstanceProfile, entry.IamInstanceProfile, c.name, "unexpected Iam Instance Profile")
+						assert.Equal(t, expectedEntry.InstanceType, entry.InstanceType, c.name, "unexpected Instance Type")
+						assert.Equal(t, expectedEntry.Available, entry.Available, c.name, "unexpected status")
+					}
+				}
+			}
+		})
+	}
+}
+
 var _ api.AwsEC2SpotRequestManager = &awsEC2SpotRequestManagerMock{}
 
 func newAwsEC2SpotRequestManagerMock(requests []*ec2.SpotInstanceRequest) *awsEC2SpotRequestManagerMock {
@@ -899,17 +1099,11 @@ func (m *awsEC2SpotRequestManagerMock) DescribeSpotInstanceRequests(input *ec2.D
 		return nil, errors.New(m.error)
 	}
 
-	var err error
 	startTime := time.Time{}
 	searchedStates := make([]*string, 0)
 
 	for _, filter := range input.Filters {
 		switch aws.StringValue(filter.Name) {
-		case api.InputTimeFilter:
-			startTime, err = time.Parse(time.RFC3339, aws.StringValue(filter.Values[0]))
-			if err != nil {
-				startTime = time.Time{}
-			}
 		case api.InputStateFilter:
 			for _, state := range filter.Values {
 				searchedStates = append(searchedStates, state)
@@ -949,7 +1143,8 @@ func newSpotInstanceRequestInstance(id, state, status, iamInstanceProfile, insta
 		},
 		State: aws.String(state),
 		Status: &ec2.SpotInstanceStatus{
-			Code: aws.String(status),
+			Code:       aws.String(status),
+			UpdateTime: created,
 		},
 		CreateTime: created,
 	}

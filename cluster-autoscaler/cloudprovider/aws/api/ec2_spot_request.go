@@ -26,8 +26,6 @@ import (
 )
 
 const (
-	// InputTimeFilter request create time filter key for spot request listing
-	InputTimeFilter = "create-time"
 	// InputStateFilter request state filter key for spot request listing
 	InputStateFilter = "state"
 )
@@ -104,11 +102,13 @@ func (srs *spotRequestService) List() ([]*SpotRequest, error) {
 	}
 
 	for _, request := range awsSpotRequests.SpotInstanceRequests {
-		converted := srs.convertAwsSpotRequest(request)
-		list = append(list, converted)
+		if aws.TimeValue(request.Status.UpdateTime).After(srs.lastCheckTime) {
+			converted := srs.convertAwsSpotRequest(request)
+			list = append(list, converted)
+		}
 	}
 
-	klog.V(5).Infof("retrieved %d spot requests from AWS", len(list))
+	klog.V(5).Infof("retrieved %d open or failed spot requests from AWS", len(list))
 	srs.lastCheckTime = time.Now()
 
 	return list, nil
@@ -130,13 +130,6 @@ func (srs *spotRequestService) convertAwsSpotRequest(request *ec2.SpotInstanceRe
 func (srs *spotRequestService) listArguments() *ec2.DescribeSpotInstanceRequestsInput {
 	arguments := &ec2.DescribeSpotInstanceRequestsInput{
 		Filters: []*ec2.Filter{
-			// TODO: determine why create-time does not work
-			//{
-			//	Name: aws.String(InputTimeFilter),
-			//	Values: []*string{
-			//		aws.String(srs.lastCheckTime.Format(time.RFC3339)),
-			//	},
-			//},
 			{
 				Name: aws.String(InputStateFilter),
 				Values: []*string{
