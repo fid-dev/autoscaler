@@ -113,11 +113,25 @@ func (srs *spotRequestService) List() ([]*SpotRequest, error) {
 		len(awsSpotRequests.SpotInstanceRequests), wantedStates)
 
 	relevant := make([]*ec2.SpotInstanceRequest, 0)
+	stateCounts := map[string]int{}
 
 	for _, request := range awsSpotRequests.SpotInstanceRequests {
-		if slice.ContainsString(wantedStates, aws.StringValue(request.State), nil) {
+		state := aws.StringValue(request.State)
+
+		if _, ok := stateCounts[state]; ok {
+			stateCounts[state] += 1
+		} else {
+			stateCounts[state] = 1
+		}
+
+		if slice.ContainsString(wantedStates, state, nil) {
 			relevant = append(relevant, request)
 		}
+	}
+
+	for state, count := range stateCounts {
+		klog.V(3).Infof("found %d requests with state %s",
+			count, state)
 	}
 
 	klog.V(2).Infof("filter %d relevant requests using last check time: %v",
