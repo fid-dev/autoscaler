@@ -23,11 +23,19 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/pkg/errors"
 	"k8s.io/klog"
+	"k8s.io/kubernetes/pkg/util/slice"
 )
 
 const (
 	// InputStateFilter request state filter key for spot request listing
 	InputStateFilter = "state"
+)
+
+var (
+	wantedStates = []string{
+		"open",
+		"failed",
+	}
 )
 
 // AwsEC2SpotRequestManager wraps the necessary AWS API methods
@@ -85,7 +93,7 @@ func (srs *spotRequestService) CancelRequests(requests []*SpotRequest) error {
 	if err != nil {
 		return errors.Wrap(err, "could not cancel spot requests")
 	}
-	klog.V(5).Infof("canceled %d spot requests from AWS: %v", len(ids), ids)
+	klog.V(3).Infof("canceled %d spot requests from AWS: %v", len(ids), ids)
 
 	return nil
 }
@@ -101,14 +109,28 @@ func (srs *spotRequestService) List() ([]*SpotRequest, error) {
 		return nil, errors.Wrap(err, "could not retrieve AWS Spot Request list")
 	}
 
+	klog.V(2).Infof("filter %d requests using wanted states: %v",
+		len(awsSpotRequests.SpotInstanceRequests), wantedStates)
+
+	relevant := make([]*ec2.SpotInstanceRequest, 0)
+
 	for _, request := range awsSpotRequests.SpotInstanceRequests {
+		if slice.ContainsString(wantedStates, aws.StringValue(request.State), nil) {
+			relevant = append(relevant, request)
+		}
+	}
+
+	klog.V(2).Infof("filter %d relevant requests using last check time: %v",
+		len(relevant), srs.lastCheckTime)
+
+	for _, request := range relevant {
 		if aws.TimeValue(request.Status.UpdateTime).After(srs.lastCheckTime) {
 			converted := srs.convertAwsSpotRequest(request)
 			list = append(list, converted)
 		}
 	}
 
-	klog.V(5).Infof("retrieved %d open or failed spot requests from AWS", len(list))
+	klog.V(3).Infof("retrieved %d open or failed spot requests from AWS", len(list))
 	srs.lastCheckTime = time.Now()
 
 	return list, nil
@@ -128,17 +150,5 @@ func (srs *spotRequestService) convertAwsSpotRequest(request *ec2.SpotInstanceRe
 }
 
 func (srs *spotRequestService) listArguments() *ec2.DescribeSpotInstanceRequestsInput {
-	arguments := &ec2.DescribeSpotInstanceRequestsInput{
-		Filters: []*ec2.Filter{
-			{
-				Name: aws.String(InputStateFilter),
-				Values: []*string{
-					aws.String("open"),
-					aws.String("failed"),
-				},
-			},
-		},
-	}
-
-	return arguments
+	return &ec2.DescribeSpotInstanceRequestsInput{}
 }

@@ -185,7 +185,7 @@ func (m *spotAvailabilityMonitor) requestsAllValid(asgRequests []*api.SpotReques
 	if len(asgRequests) > 0 {
 		for _, request := range asgRequests {
 			if request.State == api.AWSSpotRequestStateFailed {
-				klog.V(4).Infof("spot request %v has invalid state %v", request.ID, request.State)
+				klog.V(3).Infof("spot request %v has invalid state %v", request.ID, request.State)
 				return false
 			}
 
@@ -197,7 +197,7 @@ func (m *spotAvailabilityMonitor) requestsAllValid(asgRequests []*api.SpotReques
 			case api.AWSSpotRequestStatusOversubscribed:
 				fallthrough
 			case api.AWSSpotRequestStatusPriceToLow:
-				klog.V(4).Infof("spot request %v has invalid status %v", request.ID, request.Status)
+				klog.V(3).Infof("spot request %v has invalid status %v", request.ID, request.Status)
 				return false
 			}
 		}

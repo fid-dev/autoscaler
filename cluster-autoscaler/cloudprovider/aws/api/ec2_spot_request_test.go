@@ -290,7 +290,7 @@ idloop:
 			if aws.StringValue(id) == aws.StringValue(request.SpotInstanceRequestId) {
 				canceledIds = append(canceledIds, &ec2.CancelledSpotInstanceRequest{
 					SpotInstanceRequestId: request.SpotInstanceRequestId,
-					State:                 request.State,
+					State: request.State,
 				})
 				request.State = aws.String("cancelled")
 				continue idloop
@@ -308,32 +308,7 @@ func (m *awsEC2SpotRequestManagerMock) DescribeSpotInstanceRequests(input *ec2.D
 		return nil, errors.New(m.error)
 	}
 
-	startTime := time.Time{}
-	searchedStates := make([]*string, 0)
-
-	for _, filter := range input.Filters {
-		switch aws.StringValue(filter.Name) {
-		case InputStateFilter:
-			for _, state := range filter.Values {
-				searchedStates = append(searchedStates, state)
-			}
-		}
-	}
-
-	requests := make([]*ec2.SpotInstanceRequest, 0)
-
-	for _, request := range m.requests {
-		if aws.TimeValue(request.CreateTime).After(startTime) {
-			for _, state := range searchedStates {
-				if aws.StringValue(request.State) == aws.StringValue(state) {
-					requests = append(requests, request)
-					break
-				}
-			}
-		}
-	}
-
-	return &ec2.DescribeSpotInstanceRequestsOutput{SpotInstanceRequests: requests}, nil
+	return &ec2.DescribeSpotInstanceRequestsOutput{SpotInstanceRequests: m.requests}, nil
 }
 
 func newSpotInstanceRequestInstance(id, state, status, iamInstanceProfile, instanceType, availabilityZone string, created *time.Time) *ec2.SpotInstanceRequest {
