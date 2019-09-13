@@ -19,20 +19,32 @@ package core
 import (
 	"time"
 
-	"github.com/golang/glog"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
+	cloudBuilder "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
+	"k8s.io/autoscaler/cluster-autoscaler/clusterstate"
+	"k8s.io/autoscaler/cluster-autoscaler/config"
+	"k8s.io/autoscaler/cluster-autoscaler/context"
+	"k8s.io/autoscaler/cluster-autoscaler/estimator"
+	"k8s.io/autoscaler/cluster-autoscaler/expander"
+	"k8s.io/autoscaler/cluster-autoscaler/expander/factory"
+	ca_processors "k8s.io/autoscaler/cluster-autoscaler/processors"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/backoff"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
 	kube_client "k8s.io/client-go/kubernetes"
-	kube_record "k8s.io/client-go/tools/record"
 )
 
 // AutoscalerOptions is the whole set of options for configuring an autoscaler
 type AutoscalerOptions struct {
-	AutoscalingOptions
-	dynamic.ConfigFetcherOptions
+	config.AutoscalingOptions
+	KubeClient             kube_client.Interface
+	AutoscalingKubeClients *context.AutoscalingKubeClients
+	CloudProvider          cloudprovider.CloudProvider
+	PredicateChecker       *simulator.PredicateChecker
+	ExpanderStrategy       expander.Strategy
+	EstimatorBuilder       estimator.EstimatorBuilder
+	Processors             *ca_processors.AutoscalingProcessors
+	Backoff                backoff.Backoff
 }
 
 // Autoscaler is the main component of CA which scales up/down node groups according to its configuration
@@ -40,28 +52,64 @@ type AutoscalerOptions struct {
 type Autoscaler interface {
 	// RunOnce represents an iteration in the control-loop of CA
 	RunOnce(currentTime time.Time) errors.AutoscalerError
-	// CleanUp represents a clean-up required before the first invocation of RunOnce
-	CleanUp()
-	// CloudProvider returns the cloud provider associated to this autoscaler
-	CloudProvider() cloudprovider.CloudProvider
 	// ExitCleanUp is a clean-up performed just before process termination.
 	ExitCleanUp()
 }
 
 // NewAutoscaler creates an autoscaler of an appropriate type according to the parameters
-func NewAutoscaler(opts AutoscalerOptions, predicateChecker *simulator.PredicateChecker, kubeClient kube_client.Interface,
-	kubeEventRecorder kube_record.EventRecorder, listerRegistry kube_util.ListerRegistry) (Autoscaler, errors.AutoscalerError) {
+func NewAutoscaler(opts AutoscalerOptions) (Autoscaler, errors.AutoscalerError) {
+	err := initializeDefaultOptions(&opts)
+	if err != nil {
+		return nil, errors.ToAutoscalerError(errors.InternalError, err)
+	}
+	return NewStaticAutoscaler(
+		opts.AutoscalingOptions,
+		opts.PredicateChecker,
+		opts.AutoscalingKubeClients,
+		opts.Processors, opts.CloudProvider,
+		opts.ExpanderStrategy,
+		opts.EstimatorBuilder,
+		opts.Backoff), nil
+}
 
-	autoscalerBuilder := NewAutoscalerBuilder(opts.AutoscalingOptions, predicateChecker, kubeClient, kubeEventRecorder, listerRegistry)
-	if opts.ConfigMapName != "" {
-		if opts.NodeGroupAutoDiscovery != "" {
-			glog.Warning("Both --configmap and --node-group-auto-discovery were specified but only the former is going to take effect")
+// Initialize default options if not provided.
+func initializeDefaultOptions(opts *AutoscalerOptions) error {
+	if opts.Processors == nil {
+		opts.Processors = ca_processors.DefaultProcessors()
+	}
+	if opts.AutoscalingKubeClients == nil {
+		opts.AutoscalingKubeClients = context.NewAutoscalingKubeClients(opts.AutoscalingOptions, opts.KubeClient)
+	}
+	if opts.PredicateChecker == nil {
+		predicateCheckerStopChannel := make(chan struct{})
+		predicateChecker, err := simulator.NewPredicateChecker(opts.KubeClient, predicateCheckerStopChannel)
+		if err != nil {
+			return err
 		}
-		configFetcher := dynamic.NewConfigFetcher(opts.ConfigFetcherOptions, kubeClient, kubeEventRecorder)
-		return NewDynamicAutoscaler(autoscalerBuilder, configFetcher)
+		opts.PredicateChecker = predicateChecker
 	}
-	if opts.NodeGroupAutoDiscovery != "" {
-		return NewPollingAutoscaler(autoscalerBuilder)
+	if opts.CloudProvider == nil {
+		opts.CloudProvider = cloudBuilder.NewCloudProvider(opts.AutoscalingOptions)
 	}
-	return autoscalerBuilder.Build()
+	if opts.ExpanderStrategy == nil {
+		expanderStrategy, err := factory.ExpanderStrategyFromString(opts.ExpanderName,
+			opts.CloudProvider, opts.AutoscalingKubeClients.AllNodeLister())
+		if err != nil {
+			return err
+		}
+		opts.ExpanderStrategy = expanderStrategy
+	}
+	if opts.EstimatorBuilder == nil {
+		estimatorBuilder, err := estimator.NewEstimatorBuilder(opts.EstimatorName)
+		if err != nil {
+			return err
+		}
+		opts.EstimatorBuilder = estimatorBuilder
+	}
+	if opts.Backoff == nil {
+		opts.Backoff =
+			backoff.NewIdBasedExponentialBackoff(clusterstate.InitialNodeGroupBackoffDuration, clusterstate.MaxNodeGroupBackoffDuration, clusterstate.NodeGroupBackoffResetTimeout)
+	}
+
+	return nil
 }

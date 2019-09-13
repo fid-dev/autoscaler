@@ -1,7 +1,7 @@
-commit bfab46cf2543ac17f8c0e75b80631555ac7a6aed (origin/release-1.8)
-Merge: a213f6cf88 46ff2c44c7
-Author: Adam Worrall <abw@google.com>
-Date:   Thu Sep 21 16:17:36 2017 -0700
+Merge: abc71e373f d4ff786eb0
+Author: Kubernetes Prow Robot <k8s-ci-robot@users.noreply.github.com>
+Date:   Tue Jan 8 23:56:01 2019 -0800
 
-    Merge remote-tracking branch 'origin/master' into release-1.8
+    Merge pull request #72668 from ixdy/automated-cherry-pick-of-#72173-#72218-release-1.13
 
+    Automated cherry pick of #72173: make integration/verify script look for k8s under GOPATH #72218: Clean up artifacts variables in hack scripts

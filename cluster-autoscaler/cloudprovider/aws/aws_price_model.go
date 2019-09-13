@@ -39,14 +39,16 @@ const (
 	gpuPricePerHour = 1.21 - (((16 * cpuPricePerHour) + (122 * memoryPricePerHourPerGb)) * 0.2)
 
 	gigabyte = 1024.0 * 1024.0 * 1024.0
+
+	resourceNvidiaGPU = "nvidia.com/gpu"
 )
 
 type instanceByASGFinder interface {
-	FindForInstance(ref *AwsRef) (*Asg, error)
+	GetAsgForInstance(instance AwsInstanceRef) *asg
 }
 
 // NewPriceModel is the constructor of priceModel which provides general access to price information
-func NewPriceModel(asgs *autoScalingGroups, pd price.ShapeDescriptor) *priceModel {
+func NewPriceModel(asgs instanceByASGFinder, pd price.ShapeDescriptor) *priceModel {
 	return &priceModel{
 		asgs:            asgs,
 		priceDescriptor: pd,
@@ -63,23 +65,28 @@ type priceModel struct {
 // NodePrice returns a price of running the given node for a given period of time.
 // All prices are in USD.
 func (pm *priceModel) NodePrice(node *apiv1.Node, startTime time.Time, endTime time.Time) (float64, error) {
-	instance, err := AwsRefFromProviderId(node.Spec.ProviderID)
-	if err != nil {
-		return 0, err
+	var (
+		asgName string
+		found   bool
+	)
+
+	if asgName, found = node.ObjectMeta.Annotations[nodeTemplateASGAnnotation]; !found {
+		instanceRef, err := AwsRefFromProviderId(node.Spec.ProviderID)
+		if err != nil {
+			return 0, err
+		}
+
+		asg := pm.asgs.GetAsgForInstance(*instanceRef)
+		if asg == nil {
+			return 0, fmt.Errorf("asg for instance %s (%s) not found", instanceRef.String(), node.Spec.ProviderID)
+		}
+
+		asgName = asg.Name
 	}
 
-	asg, err := pm.asgs.FindForInstance(instance)
+	hourlyPrice, err := pm.priceDescriptor.Price(asgName)
 	if err != nil {
-		return 0, err
-	}
-
-	if asg == nil {
-		return 0, fmt.Errorf("asg for instance %s (%s) not found", instance, node.Spec.ProviderID)
-	}
-
-	hourlyPrice, err := pm.priceDescriptor.Price(asg.Name)
-	if err != nil {
-		return 0, fmt.Errorf("failed to describe price for asg %s: %v", asg.Name, err)
+		return 0, fmt.Errorf("failed to describe price for asg %s: %v", asgName, err)
 	}
 
 	hours := getHours(startTime, endTime)
@@ -104,7 +111,7 @@ func getBasePrice(resources apiv1.ResourceList, startTime time.Time, endTime tim
 	sum := 0.0
 	cpu := resources[apiv1.ResourceCPU]
 	mem := resources[apiv1.ResourceMemory]
-	gpu := resources[apiv1.ResourceNvidiaGPU]
+	gpu := resources[resourceNvidiaGPU]
 	sum += float64(cpu.MilliValue()) / 1000.0 * cpuPricePerHour * hours
 	sum += float64(gpu.MilliValue()) / 1000.0 * gpuPricePerHour * hours
 	sum += float64(mem.Value()) / gigabyte * memoryPricePerHourPerGb * hours

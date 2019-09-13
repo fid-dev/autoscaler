@@ -22,7 +22,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
-	"k8s.io/kubernetes/plugin/pkg/scheduler/schedulercache"
+	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
 )
 
 // podInfo contains Pod and score that corresponds to how important it is to handle the pod first.
@@ -30,12 +30,6 @@ type podInfo struct {
 	score float64
 	pod   *apiv1.Pod
 }
-
-type byScoreDesc []*podInfo
-
-func (a byScoreDesc) Len() int           { return len(a) }
-func (a byScoreDesc) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a byScoreDesc) Less(i, j int) bool { return a[i].score > a[j].score }
 
 // BinpackingNodeEstimator estimates the number of needed nodes to handle the given amount of pods.
 type BinpackingNodeEstimator struct {
@@ -57,10 +51,10 @@ func NewBinpackingNodeEstimator(predicateChecker *simulator.PredicateChecker) *B
 // It is assumed that all pods from the given list can fit to nodeTemplate.
 // Returns the number of nodes needed to accommodate all pods from the list.
 func (estimator *BinpackingNodeEstimator) Estimate(pods []*apiv1.Pod, nodeTemplate *schedulercache.NodeInfo,
-	comingNodes []*schedulercache.NodeInfo) int {
+	upcomingNodes []*schedulercache.NodeInfo) int {
 
 	podInfos := calculatePodScore(pods, nodeTemplate)
-	sort.Sort(byScoreDesc(podInfos))
+	sort.Slice(podInfos, func(i, j int) bool { return podInfos[i].score > podInfos[j].score })
 
 	// nodeWithPod function returns NodeInfo, which is a copy of nodeInfo argument with an additional pod scheduled on it.
 	nodeWithPod := func(nodeInfo *schedulercache.NodeInfo, pod *apiv1.Pod) *schedulercache.NodeInfo {
@@ -72,12 +66,12 @@ func (estimator *BinpackingNodeEstimator) Estimate(pods []*apiv1.Pod, nodeTempla
 	}
 
 	newNodes := make([]*schedulercache.NodeInfo, 0)
-	newNodes = append(newNodes, comingNodes...)
+	newNodes = append(newNodes, upcomingNodes...)
 
 	for _, podInfo := range podInfos {
 		found := false
 		for i, nodeInfo := range newNodes {
-			if err := estimator.predicateChecker.CheckPredicates(podInfo.pod, nil, nodeInfo, simulator.ReturnSimpleError); err == nil {
+			if err := estimator.predicateChecker.CheckPredicates(podInfo.pod, nil, nodeInfo); err == nil {
 				found = true
 				newNodes[i] = nodeWithPod(nodeInfo, podInfo.pod)
 				break
@@ -87,7 +81,7 @@ func (estimator *BinpackingNodeEstimator) Estimate(pods []*apiv1.Pod, nodeTempla
 			newNodes = append(newNodes, nodeWithPod(nodeTemplate, podInfo.pod))
 		}
 	}
-	return len(newNodes) - len(comingNodes)
+	return len(newNodes) - len(upcomingNodes)
 }
 
 // Calculates score for all pods and returns podInfo structure.

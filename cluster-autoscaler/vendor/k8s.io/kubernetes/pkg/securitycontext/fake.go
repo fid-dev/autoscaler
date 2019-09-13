@@ -18,7 +18,7 @@ package securitycontext
 
 import (
 	"k8s.io/api/core/v1"
-	"k8s.io/kubernetes/pkg/api"
+	api "k8s.io/kubernetes/pkg/apis/core"
 )
 
 // ValidSecurityContextWithContainerDefaults creates a valid security context provider based on
@@ -35,8 +35,10 @@ func ValidSecurityContextWithContainerDefaults() *v1.SecurityContext {
 // empty container defaults.  Used for testing.
 func ValidInternalSecurityContextWithContainerDefaults() *api.SecurityContext {
 	priv := false
+	dpm := api.DefaultProcMount
 	return &api.SecurityContext{
 		Capabilities: &api.Capabilities{},
 		Privileged:   &priv,
+		ProcMount:    &dpm,
 	}
 }

@@ -36,7 +36,7 @@ import (
 // Set to true if the wrong build tags are set (see validate_disabled.go).
 var isDisabledBuild bool
 
-// Interface for validating that a pod with with an AppArmor profile can be run by a Node.
+// Interface for validating that a pod with an AppArmor profile can be run by a Node.
 type Validator interface {
 	Validate(pod *v1.Pod) error
 	ValidateHost() error
@@ -136,7 +136,7 @@ func validateProfile(profile string, loadedProfiles map[string]bool) error {
 }
 
 func ValidateProfileFormat(profile string) error {
-	if profile == "" || profile == ProfileRuntimeDefault {
+	if profile == "" || profile == ProfileRuntimeDefault || profile == ProfileNameUnconfined {
 		return nil
 	}
 	if !strings.HasPrefix(profile, ProfileNamePrefix) {

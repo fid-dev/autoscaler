@@ -18,7 +18,11 @@ package api
 
 import (
 	"sort"
+	"strconv"
 	"time"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"k8s.io/klog"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 )
@@ -47,13 +51,16 @@ type spotPriceHistoryService struct {
 
 // DescribeSpotPriceHistory returns the spot price history for given instance type
 func (spd *spotPriceHistoryService) DescribeSpotPriceHistory(instanceType string, availabilityZone string, startTime time.Time) (*SpotPriceHistory, error) {
-	req := &ec2.DescribeSpotPriceHistoryInput{
-		Filters: []*ec2.Filter{
-			spotPriceFilter("availability-zone", availabilityZone),
-			spotPriceFilter("product-description", "Linux/UNIX"),
-			spotPriceFilter("instance-type", instanceType),
-		},
-		StartTime: &startTime,
+	req := new(ec2.DescribeSpotPriceHistoryInput)
+	req.SetInstanceTypes(aws.StringSlice([]string{instanceType}))
+	req.SetAvailabilityZone(availabilityZone)
+	req.SetProductDescriptions(aws.StringSlice([]string{"Linux/UNIX"}))
+
+	if startTime.IsZero() {
+		klog.V(5).Info("initial history loading - retrieve only the last 10 prices")
+		req.SetMaxResults(10)
+	} else {
+		req.SetStartTime(startTime)
 	}
 
 	prices := make(SpotPriceItems, 0)
@@ -68,6 +75,11 @@ func (spd *spotPriceHistoryService) DescribeSpotPriceHistory(instanceType string
 
 		req.NextToken = res.NextToken
 		if req.NextToken == nil || len(*req.NextToken) == 0 {
+			klog.V(6).Info("breaking history loop after pagination record")
+			break
+		}
+		if startTime.IsZero() {
+			klog.V(6).Info("breaking history loop after retrieving last 10 prices")
 			break
 		}
 	}
@@ -111,22 +123,14 @@ func (sps SpotPriceItems) Swap(i, j int) {
 	sps[i], sps[j] = sps[j], sps[i]
 }
 
-func spotPriceFilter(name string, values ...string) *ec2.Filter {
-	vs := stringToStringSliceRef(values...)
-
-	return &ec2.Filter{
-		Name:   &name,
-		Values: vs,
-	}
-}
-
 func convertSpotPriceItems(in ...*ec2.SpotPrice) SpotPriceItems {
 	prices := make(SpotPriceItems, len(in))
 
 	for i, item := range in {
-		price, err := stringRefToFloat64(item.SpotPrice)
+		priceValue := aws.StringValue(item.SpotPrice)
+		price, err := strconv.ParseFloat(priceValue, 64)
 		if err != nil {
-			// TODO add logging
+			klog.Warningf("Failed to parse aws spot price '%s' to float: %v", priceValue, err)
 			continue
 		}
 

@@ -17,14 +17,15 @@ limitations under the License.
 package metrics
 
 import (
-	"k8s.io/apimachinery/pkg/api/resource"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// +genclient=true
+// +genclient
 // +resourceName=nodes
-// +readonly=true
-// +nonNamespaced=true
+// +genclient:readonly
+// +genclient:nonNamespaced
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // resource usage metrics of a node.
 type NodeMetrics struct {
@@ -37,8 +38,10 @@ type NodeMetrics struct {
 	Window    metav1.Duration
 
 	// The memory usage is the memory working set.
-	Usage ResourceList
+	Usage corev1.ResourceList
 }
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // NodeMetricsList is a list of NodeMetrics.
 type NodeMetricsList struct {
@@ -51,9 +54,10 @@ type NodeMetricsList struct {
 	Items []NodeMetrics
 }
 
-// +genclient=true
+// +genclient
 // +resourceName=pods
-// +readonly=true
+// +genclient:readonly
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // resource usage metrics of a pod.
 type PodMetrics struct {
@@ -68,6 +72,8 @@ type PodMetrics struct {
 	// Metrics for all containers are collected within the same time window.
 	Containers []ContainerMetrics
 }
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // PodMetricsList is a list of PodMetrics.
 type PodMetricsList struct {
@@ -85,19 +91,5 @@ type ContainerMetrics struct {
 	// Container name corresponding to the one from pod.spec.containers.
 	Name string
 	// The memory usage is the memory working set.
-	Usage ResourceList
+	Usage corev1.ResourceList
 }
-
-// NOTE: ResourceName and ResourceList are copied from
-// k8s.io/kubernetes/pkg/api/types.go. We cannot depend on
-// k8s.io/kubernetes/pkg/api because that creates cyclic dependency between
-// k8s.io/metrics and k8s.io/kubernetes. We cannot depend on
-// k8s.io/client-go/pkg/api because the package is going to be deprecated soon.
-// There is no need to keep them exact copies. Each repo can define its own
-// internal objects.
-
-// ResourceList is a set of (resource name, quantity) pairs.
-type ResourceList map[ResourceName]resource.Quantity
-
-// ResourceName is the name identifying various resources in a ResourceList.
-type ResourceName string

@@ -1,8 +1,9 @@
 approvers:
-- fgrzadkowski
-- mwielgus
 - piosz
+- aleksandra-malinowska
+- losipiuk
 reviewers:
-- fgrzadkowski
-- mwielgus
+- feiskyer
 - piosz
+- aleksandra-malinowska
+- losipiuk

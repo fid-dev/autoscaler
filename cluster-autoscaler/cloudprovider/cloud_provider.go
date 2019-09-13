@@ -17,15 +17,12 @@ limitations under the License.
 package cloudprovider
 
 import (
-	"bytes"
-	"fmt"
-	"math"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	"k8s.io/kubernetes/plugin/pkg/scheduler/schedulercache"
+	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
 )
 
 // CloudProvider contains configuration info and functions for interacting with
@@ -53,7 +50,8 @@ type CloudProvider interface {
 	// NewNodeGroup builds a theoretical node group based on the node definition provided. The node group is not automatically
 	// created on the cloud provider side. The node group is not returned by NodeGroups() until it is created.
 	// Implementation optional.
-	NewNodeGroup(machineType string, labels map[string]string, extraResources map[string]resource.Quantity) (NodeGroup, error)
+	NewNodeGroup(machineType string, labels map[string]string, systemLabels map[string]string,
+		taints []apiv1.Taint, extraResources map[string]resource.Quantity) (NodeGroup, error)
 
 	// GetResourceLimiter returns struct containing limits (max, min) for resources (cores, memory etc.).
 	GetResourceLimiter() (*ResourceLimiter, error)
@@ -67,10 +65,14 @@ type CloudProvider interface {
 }
 
 // ErrNotImplemented is returned if a method is not implemented.
-var ErrNotImplemented errors.AutoscalerError = errors.NewAutoscalerError(errors.InternalError, "Not implemented")
+var ErrNotImplemented = errors.NewAutoscalerError(errors.InternalError, "Not implemented")
 
 // ErrAlreadyExist is returned if a method is not implemented.
-var ErrAlreadyExist errors.AutoscalerError = errors.NewAutoscalerError(errors.InternalError, "Already exist")
+var ErrAlreadyExist = errors.NewAutoscalerError(errors.InternalError, "Already exist")
+
+// ErrIllegalConfiguration is returned when trying to create NewNodeGroup with
+// configuration that is not supported by cloudprovider.
+var ErrIllegalConfiguration = errors.NewAutoscalerError(errors.InternalError, "Configuration not allowed by cloud provider")
 
 // NodeGroup contains configuration info and functions to control a set
 // of nodes that have the same capacity and set of labels.
@@ -111,7 +113,9 @@ type NodeGroup interface {
 	Debug() string
 
 	// Nodes returns a list of all nodes that belong to this node group.
-	Nodes() ([]string, error)
+	// It is required that Instance objects returned by this method have Id field set.
+	// Other fields are optional.
+	Nodes() ([]Instance, error)
 
 	// TemplateNodeInfo returns a schedulercache.NodeInfo structure of an empty
 	// (as if just started) node. This will be used in scale-up simulations to
@@ -126,7 +130,7 @@ type NodeGroup interface {
 	Exist() bool
 
 	// Create creates the node group on the cloud provider side. Implementation optional.
-	Create() error
+	Create() (NodeGroup, error)
 
 	// Delete deletes the node group on the cloud provider side.
 	// This will be executed only for autoprovisioned node groups, once their size drops to 0.
@@ -138,13 +142,65 @@ type NodeGroup interface {
 	Autoprovisioned() bool
 }
 
+// Instance represents a cloud-provider node. The node does not necessarily map to k8s node
+// i.e it does not have to be registered in k8s cluster despite being returned by NodeGroup.Nodes()
+// method. Also it is sane to have Instance object for nodes which are being created or deleted.
+type Instance struct {
+	// Id is instance id.
+	Id string
+	// Status represents status of node. (Optional)
+	Status *InstanceStatus
+}
+
+// InstanceStatus represents instance status.
+type InstanceStatus struct {
+	// State tells if instance is running, being created or being deleted
+	State InstanceState
+	// ErrorInfo is not nil if there is error condition related to instance.
+	// E.g instance cannot be created.
+	ErrorInfo *InstanceErrorInfo
+}
+
+// InstanceState tells if instance is running, being created or being deleted
+type InstanceState int
+
+const (
+	// InstanceRunning means instance is running
+	InstanceRunning InstanceState = 1
+	// InstanceCreating means instance is being created
+	InstanceCreating InstanceState = 2
+	// InstanceDeleting means instance is being deleted
+	InstanceDeleting InstanceState = 3
+)
+
+// InstanceErrorInfo provides information about error condition on instance
+type InstanceErrorInfo struct {
+	// ErrorClass tells what is class of error on instance
+	ErrorClass InstanceErrorClass
+	// ErrorCode is cloud-provider specific error code for error condition
+	ErrorCode string
+	// ErrorMessage is human readable description of error condition
+	ErrorMessage string
+}
+
+// InstanceErrorClass defines class of error condition
+type InstanceErrorClass int
+
+const (
+	// OutOfResourcesErrorClass means that error is related to lack of resources (e.g. due to
+	// stockout or quota-exceeded situation)
+	OutOfResourcesErrorClass InstanceErrorClass = 1
+	// OtherErrorClass means some non-specific error situation occurred
+	OtherErrorClass InstanceErrorClass = 99
+)
+
 // PricingModel contains information about the node price and how it changes in time.
 type PricingModel interface {
 	// NodePrice returns a price of running the given node for a given period of time.
 	// All prices returned by the structure should be in the same currency.
 	NodePrice(node *apiv1.Node, startTime time.Time, endTime time.Time) (float64, error)
 
-	// PodePrice returns a theoretical minimum priece of running a pod for a given
+	// PodPrice returns a theoretical minimum price of running a pod for a given
 	// period of time on a perfectly matching machine.
 	PodPrice(pod *apiv1.Pod, startTime time.Time, endTime time.Time) (float64, error)
 }
@@ -153,54 +209,23 @@ const (
 	// ResourceNameCores is string name for cores. It's used by ResourceLimiter.
 	ResourceNameCores = "cpu"
 	// ResourceNameMemory is string name for memory. It's used by ResourceLimiter.
-	// Memory should always be provided in megabytes.
+	// Memory should always be provided in bytes.
 	ResourceNameMemory = "memory"
 )
 
-// ResourceLimiter contains limits (max, min) for resources (cores, memory etc.).
-type ResourceLimiter struct {
-	minLimits map[string]int64
-	maxLimits map[string]int64
+// IsGpuResource checks if given resource name point denotes a gpu type
+func IsGpuResource(resourceName string) bool {
+	// hack: we assume anything which is not cpu/memory to be a gpu.
+	// we are not getting anything more that a map string->limits from the user
+	return resourceName != ResourceNameCores && resourceName != ResourceNameMemory
 }
 
-// NewResourceLimiter creates new ResourceLimiter for map. Maps are deep copied.
-func NewResourceLimiter(minLimits map[string]int64, maxLimits map[string]int64) *ResourceLimiter {
-	minLimitsCopy := make(map[string]int64)
-	maxLimitsCopy := make(map[string]int64)
-	for key, value := range minLimits {
-		minLimitsCopy[key] = value
-	}
-	for key, value := range maxLimits {
-		maxLimitsCopy[key] = value
-	}
-	return &ResourceLimiter{minLimitsCopy, maxLimitsCopy}
-}
-
-// GetMin returns minimal number of resources for a given resource type.
-func (r *ResourceLimiter) GetMin(resourceName string) int64 {
-	result, found := r.minLimits[resourceName]
-	if found {
-		return result
-	}
-	return 0
-}
-
-// GetMax returns maximal number of resources for a given resource type.
-func (r *ResourceLimiter) GetMax(resourceName string) int64 {
-	result, found := r.maxLimits[resourceName]
-	if found {
-		return result
-	}
-	return math.MaxInt64
-}
-
-func (r *ResourceLimiter) String() string {
-	var buffer bytes.Buffer
-	for name, maxLimit := range r.maxLimits {
-		if buffer.Len() > 0 {
-			buffer.WriteString(", ")
+// ContainsGpuResources returns true iff given list contains any resource name denoting a gpu type
+func ContainsGpuResources(resources []string) bool {
+	for _, resource := range resources {
+		if IsGpuResource(resource) {
+			return true
 		}
-		buffer.WriteString(fmt.Sprintf("{%s : %d - %d}", name, r.minLimits[name], maxLimit))
 	}
-	return buffer.String()
+	return false
 }

@@ -24,7 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	"k8s.io/kubernetes/plugin/pkg/scheduler/schedulercache"
+	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
 )
 
 // OnScaleUpFunc is a function called on node group increase in TestCloudProvider.
@@ -34,7 +34,7 @@ type OnScaleUpFunc func(string, int) error
 // OnScaleDownFunc is a function called on cluster scale down
 type OnScaleDownFunc func(string, string) error
 
-// OnNodeGroupCreateFunc is a fuction called when a new node group is created.
+// OnNodeGroupCreateFunc is a function called when a new node group is created.
 type OnNodeGroupCreateFunc func(string) error
 
 // OnNodeGroupDeleteFunc is a function called when a node group is deleted.
@@ -136,7 +136,8 @@ func (tcp *TestCloudProvider) GetAvailableMachineTypes() ([]string, error) {
 
 // NewNodeGroup builds a theoretical node group based on the node definition provided. The node group is not automatically
 // created on the cloud provider side. The node group is not returned by NodeGroups() until it is created.
-func (tcp *TestCloudProvider) NewNodeGroup(machineType string, labels map[string]string, extraResources map[string]resource.Quantity) (cloudprovider.NodeGroup, error) {
+func (tcp *TestCloudProvider) NewNodeGroup(machineType string, labels map[string]string, systemLabels map[string]string,
+	taints []apiv1.Taint, extraResources map[string]resource.Quantity) (cloudprovider.NodeGroup, error) {
 	return &TestNodeGroup{
 		cloudProvider:   tcp,
 		id:              "autoprovisioned-" + machineType,
@@ -146,46 +147,51 @@ func (tcp *TestCloudProvider) NewNodeGroup(machineType string, labels map[string
 		exist:           false,
 		autoprovisioned: true,
 		machineType:     machineType,
+		labels:          labels,
+		taints:          taints,
 	}, nil
+}
+
+// InsertNodeGroup adds already created node group to test cloud provider.
+func (tcp *TestCloudProvider) InsertNodeGroup(nodeGroup cloudprovider.NodeGroup) {
+	tcp.Lock()
+	defer tcp.Unlock()
+
+	tcp.groups[nodeGroup.Id()] = nodeGroup
+}
+
+// BuildNodeGroup returns a test node group.
+func (tcp *TestCloudProvider) BuildNodeGroup(id string, min, max, size int, autoprovisioned bool, machineType string) *TestNodeGroup {
+	return &TestNodeGroup{
+		cloudProvider:   tcp,
+		id:              id,
+		minSize:         min,
+		maxSize:         max,
+		targetSize:      size,
+		exist:           true,
+		autoprovisioned: autoprovisioned,
+		machineType:     machineType,
+	}
 }
 
 // AddNodeGroup adds node group to test cloud provider.
 func (tcp *TestCloudProvider) AddNodeGroup(id string, min int, max int, size int) {
-	tcp.Lock()
-	defer tcp.Unlock()
-
-	tcp.groups[id] = &TestNodeGroup{
-		cloudProvider:   tcp,
-		id:              id,
-		minSize:         min,
-		maxSize:         max,
-		targetSize:      size,
-		exist:           true,
-		autoprovisioned: false,
-	}
+	nodeGroup := tcp.BuildNodeGroup(id, min, max, size, false, "")
+	tcp.InsertNodeGroup(nodeGroup)
 }
 
 // AddAutoprovisionedNodeGroup adds node group to test cloud provider.
-func (tcp *TestCloudProvider) AddAutoprovisionedNodeGroup(id string, min int, max int, size int, machineType string) {
-	tcp.Lock()
-	defer tcp.Unlock()
-
-	tcp.groups[id] = &TestNodeGroup{
-		cloudProvider:   tcp,
-		id:              id,
-		minSize:         min,
-		maxSize:         max,
-		targetSize:      size,
-		exist:           true,
-		autoprovisioned: true,
-		machineType:     machineType,
-	}
+func (tcp *TestCloudProvider) AddAutoprovisionedNodeGroup(id string, min int, max int, size int, machineType string) *TestNodeGroup {
+	nodeGroup := tcp.BuildNodeGroup(id, min, max, size, true, machineType)
+	tcp.InsertNodeGroup(nodeGroup)
+	return nodeGroup
 }
 
 // AddNode adds the given node to the group.
 func (tcp *TestCloudProvider) AddNode(nodeGroupId string, node *apiv1.Node) {
 	tcp.Lock()
 	defer tcp.Unlock()
+
 	tcp.nodes[node.Name] = nodeGroupId
 }
 
@@ -221,6 +227,8 @@ type TestNodeGroup struct {
 	exist           bool
 	autoprovisioned bool
 	machineType     string
+	labels          map[string]string
+	taints          []apiv1.Taint
 }
 
 // MaxSize returns maximum size of the node group.
@@ -277,12 +285,12 @@ func (tng *TestNodeGroup) Exist() bool {
 }
 
 // Create creates the node group on the cloud provider side.
-func (tng *TestNodeGroup) Create() error {
+func (tng *TestNodeGroup) Create() (cloudprovider.NodeGroup, error) {
 	if tng.Exist() {
-		return fmt.Errorf("Group already exist")
+		return nil, fmt.Errorf("Group already exist")
 	}
-	tng.cloudProvider.AddAutoprovisionedNodeGroup(tng.id, tng.minSize, tng.maxSize, 0, tng.machineType)
-	return tng.cloudProvider.onNodeGroupCreate(tng.id)
+	newNodeGroup := tng.cloudProvider.AddAutoprovisionedNodeGroup(tng.id, tng.minSize, tng.maxSize, 0, tng.machineType)
+	return newNodeGroup, tng.cloudProvider.onNodeGroupCreate(tng.id)
 }
 
 // Delete deletes the node group on the cloud provider side.
@@ -336,17 +344,17 @@ func (tng *TestNodeGroup) Debug() string {
 }
 
 // Nodes returns a list of all nodes that belong to this node group.
-func (tng *TestNodeGroup) Nodes() ([]string, error) {
+func (tng *TestNodeGroup) Nodes() ([]cloudprovider.Instance, error) {
 	tng.Lock()
 	defer tng.Unlock()
 
-	result := make([]string, 0)
+	instances := make([]cloudprovider.Instance, 0)
 	for node, nodegroup := range tng.cloudProvider.nodes {
 		if nodegroup == tng.id {
-			result = append(result, node)
+			instances = append(instances, cloudprovider.Instance{Id: node})
 		}
 	}
-	return result, nil
+	return instances, nil
 }
 
 // Autoprovisioned returns true if the node group is autoprovisioned.
@@ -371,4 +379,14 @@ func (tng *TestNodeGroup) TemplateNodeInfo() (*schedulercache.NodeInfo, error) {
 		return nil, fmt.Errorf("No template declared for %s", tng.id)
 	}
 	return template, nil
+}
+
+// Labels returns labels passed to the test node group when it was created.
+func (tng *TestNodeGroup) Labels() map[string]string {
+	return tng.labels
+}
+
+// Taints returns taintspassed to the test node group when it was created.
+func (tng *TestNodeGroup) Taints() []apiv1.Taint {
+	return tng.taints
 }

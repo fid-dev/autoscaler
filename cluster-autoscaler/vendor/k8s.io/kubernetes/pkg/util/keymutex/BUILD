@@ -8,14 +8,18 @@ load(
 
 go_library(
     name = "go_default_library",
-    srcs = ["keymutex.go"],
-    deps = ["//vendor/github.com/golang/glog:go_default_library"],
+    srcs = [
+        "hashed.go",
+        "keymutex.go",
+    ],
+    importpath = "k8s.io/kubernetes/pkg/util/keymutex",
+    deps = ["//vendor/k8s.io/klog:go_default_library"],
 )
 
 go_test(
     name = "go_default_test",
     srcs = ["keymutex_test.go"],
-    library = ":go_default_library",
+    embed = [":go_default_library"],
 )
 
 filegroup(

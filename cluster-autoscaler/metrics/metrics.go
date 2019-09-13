@@ -20,9 +20,11 @@ import (
 	"time"
 
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	_ "k8s.io/kubernetes/pkg/client/metrics/prometheus" // for client-go metrics registration
 
-	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/klog"
 )
 
 // NodeScaleDownReason describes reason for removing node
@@ -39,10 +41,12 @@ type FunctionLabel string
 type NodeGroupType string
 
 const (
-	caNamespace   = "cluster_autoscaler"
-	readyLabel    = "ready"
-	unreadyLabel  = "unready"
-	startingLabel = "notStarted"
+	caNamespace           = "cluster_autoscaler"
+	readyLabel            = "ready"
+	unreadyLabel          = "unready"
+	startingLabel         = "notStarted"
+	unregisteredLabel     = "unregistered"
+	longUnregisteredLabel = "longUnregistered"
 
 	// Underutilized node was removed because of low utilization
 	Underutilized NodeScaleDownReason = "underutilized"
@@ -154,6 +158,14 @@ var (
 		},
 	)
 
+	gpuScaleUpCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "scaled_up_gpu_nodes_total",
+			Help:      "Number of GPU nodes added by CA, by GPU name.",
+		}, []string{"gpu_name"},
+	)
+
 	failedScaleUpCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: caNamespace,
@@ -168,6 +180,14 @@ var (
 			Name:      "scaled_down_nodes_total",
 			Help:      "Number of nodes removed by CA.",
 		}, []string{"reason"},
+	)
+
+	gpuScaleDownCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "scaled_down_gpu_nodes_total",
+			Help:      "Number of GPU nodes removed by CA, by reason and GPU name.",
+		}, []string{"reason", "gpu_name"},
 	)
 
 	evictionsCount = prometheus.NewCounter(
@@ -212,7 +232,8 @@ var (
 	)
 )
 
-func init() {
+// RegisterAll registers all metrics.
+func RegisterAll() {
 	prometheus.MustRegister(clusterSafeToAutoscale)
 	prometheus.MustRegister(nodesCount)
 	prometheus.MustRegister(nodeGroupsCount)
@@ -221,8 +242,10 @@ func init() {
 	prometheus.MustRegister(functionDuration)
 	prometheus.MustRegister(errorsCount)
 	prometheus.MustRegister(scaleUpCount)
+	prometheus.MustRegister(gpuScaleUpCount)
 	prometheus.MustRegister(failedScaleUpCount)
 	prometheus.MustRegister(scaleDownCount)
+	prometheus.MustRegister(gpuScaleDownCount)
 	prometheus.MustRegister(evictionsCount)
 	prometheus.MustRegister(unneededNodesCount)
 	prometheus.MustRegister(napEnabled)
@@ -242,7 +265,7 @@ func UpdateDuration(label FunctionLabel, duration time.Duration) {
 	// TODO(maciekpytel): remove second condition if we manage to get
 	// asynchronous node drain
 	if duration > LogLongDurationThreshold && label != ScaleDown {
-		glog.V(4).Infof("Function %s took %v to complete", label, duration)
+		klog.V(4).Infof("Function %s took %v to complete", label, duration)
 	}
 	functionDuration.WithLabelValues(string(label)).Observe(duration.Seconds())
 }
@@ -262,10 +285,12 @@ func UpdateClusterSafeToAutoscale(safe bool) {
 }
 
 // UpdateNodesCount records the number of nodes in cluster
-func UpdateNodesCount(ready, unready, starting int) {
+func UpdateNodesCount(ready, unready, starting, longUnregistered, unregistered int) {
 	nodesCount.WithLabelValues(readyLabel).Set(float64(ready))
 	nodesCount.WithLabelValues(unreadyLabel).Set(float64(unready))
 	nodesCount.WithLabelValues(startingLabel).Set(float64(starting))
+	nodesCount.WithLabelValues(longUnregisteredLabel).Set(float64(longUnregistered))
+	nodesCount.WithLabelValues(unregisteredLabel).Set(float64(unregistered))
 }
 
 // UpdateNodeGroupsCount records the number of node groups managed by CA
@@ -286,8 +311,11 @@ func RegisterError(err errors.AutoscalerError) {
 }
 
 // RegisterScaleUp records number of nodes added by scale up
-func RegisterScaleUp(nodesCount int) {
+func RegisterScaleUp(nodesCount int, gpuType string) {
 	scaleUpCount.Add(float64(nodesCount))
+	if gpuType != gpu.MetricsNoGPU {
+		gpuScaleUpCount.WithLabelValues(gpuType).Add(float64(nodesCount))
+	}
 }
 
 // RegisterFailedScaleUp records a failed scale-up operation
@@ -296,8 +324,11 @@ func RegisterFailedScaleUp(reason FailedScaleUpReason) {
 }
 
 // RegisterScaleDown records number of nodes removed by scale down
-func RegisterScaleDown(nodesCount int, reason NodeScaleDownReason) {
+func RegisterScaleDown(nodesCount int, gpuType string, reason NodeScaleDownReason) {
 	scaleDownCount.WithLabelValues(string(reason)).Add(float64(nodesCount))
+	if gpuType != gpu.MetricsNoGPU {
+		gpuScaleDownCount.WithLabelValues(string(reason), gpuType).Add(float64(nodesCount))
+	}
 }
 
 // RegisterEvictions records number of evicted pods

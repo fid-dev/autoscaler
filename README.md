@@ -10,7 +10,7 @@ This repository contains autoscaling-related components for Kubernetes.
 Cluster so that all pods have a place to run and there are no unneeded nodes. Works with GCP, AWS and Azure. Version 1.0 (GA) was released with kubernetes 1.8.
 
 [Vertical Pod Autoscaler](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler) - a set of components that automatically adjust the
-amount of CPU and memory requested by pods running in the Kubernetes Cluster. Current state - under development.
+amount of CPU and memory requested by pods running in the Kubernetes Cluster. Current state - alpha.
 
 [Addon Resizer](https://github.com/kubernetes/autoscaler/tree/master/addon-resizer) - a simplified version of vertical pod autoscaler that modifies
 resource requests of a deployment based on the number of nodes in the Kubernetes Cluster. Current state - beta.
@@ -19,11 +19,14 @@ resource requests of a deployment based on the number of nodes in the Kubernetes
 
 Interested in autoscaling? Want to talk? Have questions, concerns or great ideas?
 
-Please join us on #sig-autoscaling at https://kubernetes.slack.com/.
-Moreover, every Monday we host a 30min sig-autoscaling meeting on
-https://zoom.us/my/k8s.sig.autoscaling at 16:00 CEST/CET, 7:00 am PST/PDT.
+Please join us on #sig-autoscaling at https://kubernetes.slack.com/, or join one
+of our weekly meetings.  See [the Kubernetes Community Repo](https://github.com/kubernetes/community/blob/master/sig-list.md) for more information.
 
 ## Getting the Code
+
+Fork the repository in the cloud:
+1. Visit https://github.com/kubernetes/autoscaler
+1. Click Fork button (top right) to establish a cloud-based fork.
 
 The code must be checked out as a subdirectory of `k8s.io`, and not `github.com`.
 
@@ -35,5 +38,8 @@ git clone https://github.com/$YOUR_GITHUB_USERNAME/autoscaler.git
 cd autoscaler
 ```
 
+Please refer to Kubernetes [Github workflow guide] for more details.
+
 [GoDoc]: https://godoc.org/k8s.io/autoscaler
 [GoDoc Widget]: https://godoc.org/k8s.io/autoscaler?status.svg
+[Github workflow guide]: https://github.com/kubernetes/community/blob/master/contributors/guide/github-workflow.md

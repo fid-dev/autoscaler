@@ -1,10 +1,23 @@
 # Cluster Autoscaler on Azure
 
-The cluster autoscaler on Azure scales worker nodes within any specified autoscaling group. It will run as a `Deployment` in your cluster. This README will go over some of the necessary steps required to get the cluster autoscaler up and running.
+The cluster autoscaler on Azure scales worker nodes within any specified autoscaling group. It will run as a Kubernetes deployment in your cluster. This README will go over some of the necessary steps required to get the cluster autoscaler up and running.
 
 ## Kubernetes Version
 
-Cluster autoscaler must run on Kubernetes with Azure VMSS support ([kubernetes#43287](https://github.com/kubernetes/kubernetes/issues/43287)). It is planed in Kubernetes v1.10.
+Kubernetes v1.10.X and Cluster autoscaler v1.2+  are required to run on Azure.
+
+Cluster autoscaler supports four VM types with Azure cloud provider:
+
+- **vmss**: For kubernetes cluster running on VMSS instances. Azure cloud provider's `vmType` parameter must be configured as 'vmss'. It requires Kubernetes with Azure VMSS support ([kubernetes#43287](https://github.com/kubernetes/kubernetes/issues/43287)).
+- **standard**: For kubernetes cluster running on VMAS instances. Azure cloud provider's `vmType` parameter must be configured as 'standard' or left as empty string. It only supports Kubernetes cluster deployed via [acs-engine](https://github.com/Azure/acs-engine).
+- **aks**: Managed Container Service([AKS](https://docs.microsoft.com/en-us/azure/aks/))
+- **acs**: Container service([ACS](https://docs.microsoft.com/en-us/azure/container-service/kubernetes/))
+
+Only **vmss** vmType supports scaling to zero nodes.
+
+## CA Version
+
+You need to replace a placeholder, '{{ ca_version }}' in manifests with CA Version such as v1.2.2.
 
 ## Permissions
 
@@ -15,188 +28,162 @@ Get azure credentials by running the following command
 az ad sp create-for-rbac --role="Contributor" --scopes="/subscriptions/<subscription-id>" --output json
 ```
 
-And fill the values with the result you got into the configmap
+## Deployment manifests
+
+### VMSS deployment
+
+Pre-requirements:
+
+- Get credentials from above `permissions` step.
+- Get the scale set name which is used for nodes scaling.
+- Encode each data with base64.
+
+Fill the values of cluster-autoscaler-azure secret in [cluster-autoscaler-vmss.yaml](cluster-autoscaler-vmss.yaml), including
+
+- ClientID: `<base64-encoded-client-id>`
+- ClientSecret: `<base64-encoded-client-secret>`
+- ResourceGroup: `<base64-encoded-resource-group>`
+- SubscriptionID: `<base64-encode-subscription-id>`
+- TenantID: `<base64-encoded-tenant-id>`
+
+> Note that all data above should be encoded with base64.
+
+And fill the node groups in container command by `--nodes`, e.g.
 
 ```yaml
-apiVersion: v1
-data:
-  ClientID: <client-id>
-  ClientSecret: <client-secret>
-  ResourceGroup: <resource-group>
-  SubscriptionID: <subscription-id>
-  TenantID: <tenand-id>
-  ScaleSetName: <scale-set-name>
-kind: ConfigMap
-metadata:
-  name: cluster-autoscaler-azure
-  namespace: kube-system
+        - --nodes=1:10:vmss1
 ```
 
-Create the configmap by running
+or multiple node groups:
+
+```yaml
+        - --nodes=1:10:vmss1
+        - --nodes=1:10:vmss2
+```
+
+Then deploy cluster-autoscaler by running
 
 ```sh
-kubectl create -f cluster-autoscaler-azure-configmap.yaml
+kubectl create -f cluster-autoscaler-vmss.yaml
 ```
-
-## Deployment
-
-```yaml
-apiVersion: extensions/v1beta1
-kind: Deployment
-metadata:
-  name: cluster-autoscaler
-  namespace: kube-system
-  labels:
-    app: cluster-autoscaler
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: cluster-autoscaler
-  template:
-    metadata:
-      labels:
-        app: cluster-autoscaler
-    spec:
-      containers:
-      - image: feisky/cluster-autoscaler:dev
-        name: cluster-autoscaler
-        resources:
-          limits:
-            cpu: 100m
-            memory: 300Mi
-          requests:
-            cpu: 100m
-            memory: 300Mi
-        env:
-        - name: ARM_SUBSCRIPTION_ID
-          valueFrom:
-            configMapKeyRef:
-              name: cluster-autoscaler-azure
-              key: SubscriptionID
-        - name: ARM_RESOURCE_GROUP
-          valueFrom:
-            configMapKeyRef:
-              name: cluster-autoscaler-azure
-              key: ResourceGroup
-        - name: ARM_TENANT_ID
-          valueFrom:
-            configMapKeyRef:
-              name: cluster-autoscaler-azure
-              key: TenantID
-        - name: ARM_CLIENT_ID
-          valueFrom:
-            configMapKeyRef:
-              name: cluster-autoscaler-azure
-              key: ClientID
-        - name: ARM_CLIENT_SECRET
-          valueFrom:
-            configMapKeyRef:
-              name: cluster-autoscaler-azure
-              key: ClientSecret
-        - name: ARM_SCALE_SET_NAME
-          valueFrom:
-            configMapKeyRef:
-              name: cluster-autoscaler-azure
-              key: ScaleSetName
-        command:
-          - ./cluster-autoscaler
-          - --v=4
-          - --cloud-provider=azure
-          - --skip-nodes-with-local-storage=false
-          - --nodes="1:10:$(ARM_SCALE_SET_NAME)"
-        volumeMounts:
-          - name: ssl-certs
-            mountPath: /etc/ssl/certs/ca-certificates.crt
-            readOnly: true
-        imagePullPolicy: "Always"
-      volumes:
-      - name: ssl-certs
-        hostPath:
-          path: "/etc/ssl/certs/ca-certificates.crt"
-```
-
-## Deploy in master node
 
 To run a CA pod in master node - CA deployment should tolerate the master `taint` and `nodeSelector` should be used to schedule the pods in master node.
 
-```yaml
-apiVersion: extensions/v1beta1
-kind: Deployment
-metadata:
-  name: cluster-autoscaler
-  namespace: kube-system
-  labels:
-    app: cluster-autoscaler
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: cluster-autoscaler
-  template:
-    metadata:
-      labels:
-        app: cluster-autoscaler
-    spec:
-      tolerations:
-      - effect: NoSchedule
-        key: node-role.kubernetes.io/master
-      nodeSelector:
-        kubernetes.io/role: master
-      containers:
-      - image: feisky/cluster-autoscaler:dev
-        name: cluster-autoscaler
-        resources:
-          limits:
-            cpu: 100m
-            memory: 300Mi
-          requests:
-            cpu: 100m
-            memory: 300Mi
-        env:
-        - name: ARM_SUBSCRIPTION_ID
-          valueFrom:
-            configMapKeyRef:
-              name: cluster-autoscaler-azure
-              key: SubscriptionID
-        - name: ARM_RESOURCE_GROUP
-          valueFrom:
-            configMapKeyRef:
-              name: cluster-autoscaler-azure
-              key: ResourceGroup
-        - name: ARM_TENANT_ID
-          valueFrom:
-            configMapKeyRef:
-              name: cluster-autoscaler-azure
-              key: TenantID
-        - name: ARM_CLIENT_ID
-          valueFrom:
-            configMapKeyRef:
-              name: cluster-autoscaler-azure
-              key: ClientID
-        - name: ARM_CLIENT_SECRET
-          valueFrom:
-            configMapKeyRef:
-              name: cluster-autoscaler-azure
-              key: ClientSecret
-        - name: ARM_SCALE_SET_NAME
-          valueFrom:
-            configMapKeyRef:
-              name: cluster-autoscaler-azure
-              key: ScaleSetName
-        command:
-          - ./cluster-autoscaler
-          - --v=4
-          - --cloud-provider=azure
-          - --skip-nodes-with-local-storage=false
-          - --nodes="1:10:$(ARM_SCALE_SET_NAME)"
-        volumeMounts:
-          - name: ssl-certs
-            mountPath: /etc/ssl/certs/ca-certificates.crt
-            readOnly: true
-        imagePullPolicy: "Always"
-      volumes:
-      - name: ssl-certs
-        hostPath:
-          path: "/etc/ssl/certs/ca-certificates.crt"
+```sh
+kubectl create -f cluster-autoscaler-vmss-master.yaml
 ```
+
+To run a CA pod with Azure managed service identity (MSI), use [cluster-autoscaler-vmss-msi.yaml](cluster-autoscaler-vmss-msi.yaml) instead:
+
+```sh
+kubectl create -f cluster-autoscaler-vmss-msi.yaml
+```
+
+### Standard deployment
+
+Pre-requirements:
+
+- Get credentials from above `permissions` step.
+- Get the initial Azure deployment name from azure portal. If you have multiple deployments (e.g. have run `acs-engine scale` command), make sure to get the first one.
+- Get a node pool name for nodes scaling from acs-engine deployment manifests
+- Encode each data with base64.
+
+Fill the values of cluster-autoscaler-azure secret in [cluster-autoscaler-standard-master.yaml](cluster-autoscaler-standard-master.yaml), including
+
+- ClientID: `<base64-encoded-client-id>`
+- ClientSecret: `<base64-encoded-client-secret>`
+- ResourceGroup: `<base64-encoded-resource-group>`
+- SubscriptionID: `<base64-encode-subscription-id>`
+- TenantID: `<base64-encoded-tenant-id>`
+- Deployment: `<base64-encoded-azure-initial-deploy-name>`
+
+> Note that all data above should be encoded with base64.
+
+And fill the node groups in container command by `--nodes`, e.g.
+
+```yaml
+        - --nodes=1:10:agentpool1
+```
+
+or multiple node groups:
+
+```yaml
+        - --nodes=1:10:agentpool1
+        - --nodes=1:10:agentpool2
+```
+
+Create Azure deploy parameters secret `cluster-autoscaler-azure-deploy-parameters` by running
+
+```sh
+kubectl -n kube-system create secret generic cluster-autoscaler-azure-deploy-parameters --from-file=deploy-parameters=./_output/<your-output-path>/azuredeploy.parameters.json
+```
+
+Then deploy cluster-autoscaler by running
+
+```sh
+kubectl create -f cluster-autoscaler-standard-master.yaml
+```
+
+To run a CA pod with Azure managed service identity (MSI), use [cluster-autoscaler-standard-msi.yaml](cluster-autoscaler-standard-msi.yaml) instead:
+
+```sh
+kubectl create -f cluster-autoscaler-standard-msi.yaml
+```
+
+**WARNING**: Cluster autoscaler depends on user provided deployment parameters to provision new nodes. It should be redeployed with new parameters after upgrading Kubernetes cluster (e.g. upgraded by `acs-engine upgrade` command), or else new nodes will be provisioned with old version.
+
+### ACS deployment
+
+Pre-requirements:
+
+- Get credentials from above `permissions` step.
+- Get the cluster name using the following:
+
+  ```
+  for ACS:
+  ```sh
+  az acs list
+  ```
+
+- Get a node pool name by extracting the value of the label **agentpool**
+  ```sh
+  kubectl get nodes --show-labels
+  ```
+
+- Encode each data with base64.
+
+Fill the values of cluster-autoscaler-azure secret in [cluster-autoscaler-containerservice](cluster-autoscaler-containerservice.yaml), including
+
+- ClientID: `<base64-encoded-client-id>`
+- ClientSecret: `<base64-encoded-client-secret>`
+- ResourceGroup: `<base64-encoded-resource-group>` (Note: ResourceGroup is case-sensitive)
+- SubscriptionID: `<base64-encode-subscription-id>`
+- TenantID: `<base64-encoded-tenant-id>`
+- ClusterName: `<base64-encoded-clustername>`
+
+> Note that all data above should be encoded with base64.
+
+
+And fill the node groups in container command by `--nodes`, with the range of nodes (minimum to be set as 3 which is the default cluster size) and node pool name obtained from pre-requirements steps above, e.g.
+
+```yaml
+        - --nodes=3:10:nodepool1
+```
+
+The vmType param determines the kind of service we are interacting with.
+For ACS fill the following base64 encoded value:
+
+```sh
+$echo ACS | base64
+QUNTCg==
+```
+
+Then deploy cluster-autoscaler by running
+
+```sh
+kubectl create -f cluster-autoscaler-containerservice.yaml
+```
+
+### AKS deployment
+
+Take a look at these docs here: https://docs.microsoft.com/en-us/azure/aks/autoscaler

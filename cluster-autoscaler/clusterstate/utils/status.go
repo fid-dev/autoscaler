@@ -28,7 +28,7 @@ import (
 	kube_client "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
 
-	"github.com/golang/glog"
+	"k8s.io/klog"
 )
 
 const (
@@ -36,6 +36,8 @@ const (
 	StatusConfigMapName = "cluster-autoscaler-status"
 	// ConfigMapLastUpdatedKey is the name of annotation informing about status ConfigMap last update.
 	ConfigMapLastUpdatedKey = "cluster-autoscaler.kubernetes.io/last-updated"
+	// ConfigMapLastUpdateFormat it the timestamp format used for last update annotation in status ConfigMap
+	ConfigMapLastUpdateFormat = "2006-01-02 15:04:05.999999999 -0700 MST"
 )
 
 // LogEventRecorder records events on some top-level object, to give user (without access to logs) a view of most important CA actions.
@@ -45,14 +47,14 @@ type LogEventRecorder struct {
 	active       bool
 }
 
-// Event record an event on underlying object. This does nothing if the underlying object is not set.
+// Event records an event on underlying object. This does nothing if the underlying object is not set.
 func (ler *LogEventRecorder) Event(eventtype, reason, message string) {
 	if ler.active && ler.statusObject != nil {
 		ler.recorder.Event(ler.statusObject, eventtype, reason, message)
 	}
 }
 
-// Eventf record an event on underlying object. This does nothing if the underlying object is not set.
+// Eventf records an event on underlying object. This does nothing if the underlying object is not set.
 func (ler *LogEventRecorder) Eventf(eventtype, reason, message string, args ...interface{}) {
 	if ler.active && ler.statusObject != nil {
 		ler.recorder.Eventf(ler.statusObject, eventtype, reason, message, args...)
@@ -82,8 +84,8 @@ func NewStatusMapRecorder(kubeClient kube_client.Interface, namespace string, re
 // ConfigMap if it doesn't exist. If logRecorder is passed and configmap update is successful
 // logRecorder's internal reference will be updated.
 func WriteStatusConfigMap(kubeClient kube_client.Interface, namespace string, msg string, logRecorder *LogEventRecorder) (*apiv1.ConfigMap, error) {
-	statusUpdateTime := time.Now()
-	statusMsg := fmt.Sprintf("Cluster-autoscaler status at %v:\n%v", statusUpdateTime, msg)
+	statusUpdateTime := time.Now().Format(ConfigMapLastUpdateFormat)
+	statusMsg := fmt.Sprintf("Cluster-autoscaler status at %s:\n%v", statusUpdateTime, msg)
 	var configMap *apiv1.ConfigMap
 	var getStatusError, writeStatusError error
 	var errMsg string
@@ -94,7 +96,7 @@ func WriteStatusConfigMap(kubeClient kube_client.Interface, namespace string, ms
 		if configMap.ObjectMeta.Annotations == nil {
 			configMap.ObjectMeta.Annotations = make(map[string]string)
 		}
-		configMap.ObjectMeta.Annotations[ConfigMapLastUpdatedKey] = fmt.Sprintf("%v", statusUpdateTime)
+		configMap.ObjectMeta.Annotations[ConfigMapLastUpdatedKey] = statusUpdateTime
 		configMap, writeStatusError = maps.Update(configMap)
 	} else if kube_errors.IsNotFound(getStatusError) {
 		configMap = &apiv1.ConfigMap{
@@ -102,7 +104,7 @@ func WriteStatusConfigMap(kubeClient kube_client.Interface, namespace string, ms
 				Namespace: namespace,
 				Name:      StatusConfigMapName,
 				Annotations: map[string]string{
-					ConfigMapLastUpdatedKey: fmt.Sprintf("%v", statusUpdateTime),
+					ConfigMapLastUpdatedKey: statusUpdateTime,
 				},
 			},
 			Data: map[string]string{
@@ -117,10 +119,10 @@ func WriteStatusConfigMap(kubeClient kube_client.Interface, namespace string, ms
 		errMsg = fmt.Sprintf("Failed to write status configmap: %v", writeStatusError)
 	}
 	if errMsg != "" {
-		glog.Error(errMsg)
+		klog.Error(errMsg)
 		return nil, errors.New(errMsg)
 	}
-	glog.V(8).Infof("Successfully wrote status configmap with body \"%v\"", statusMsg)
+	klog.V(8).Infof("Successfully wrote status configmap with body \"%v\"", statusMsg)
 	// Having this as a side-effect is somewhat ugly
 	// But it makes error handling easier, as we get a free retry each loop
 	if logRecorder != nil {
@@ -134,7 +136,7 @@ func DeleteStatusConfigMap(kubeClient kube_client.Interface, namespace string) e
 	maps := kubeClient.CoreV1().ConfigMaps(namespace)
 	err := maps.Delete(StatusConfigMapName, &metav1.DeleteOptions{})
 	if err != nil {
-		glog.Error("Failed to delete status configmap")
+		klog.Error("Failed to delete status configmap")
 	}
 	return err
 }

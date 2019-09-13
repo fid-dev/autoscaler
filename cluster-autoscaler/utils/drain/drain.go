@@ -24,7 +24,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	client "k8s.io/client-go/kubernetes"
+	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
 	"k8s.io/kubernetes/pkg/kubelet/types"
 )
 
@@ -48,7 +48,7 @@ func GetPodsForDeletionOnNodeDrain(
 	skipNodesWithSystemPods bool,
 	skipNodesWithLocalStorage bool,
 	checkReferences bool, // Setting this to true requires client to be not-null.
-	client client.Interface,
+	listers kube_util.ListerRegistry,
 	minReplica int32,
 	currentTime time.Time) ([]*apiv1.Pod, error) {
 
@@ -76,7 +76,8 @@ func GetPodsForDeletionOnNodeDrain(
 
 		daemonsetPod := false
 		replicated := false
-		safeToEvict := hasSaveToEvictAnnotation(pod)
+		safeToEvict := hasSafeToEvictAnnotation(pod)
+		terminal := isPodTerminal(pod)
 
 		controllerRef := ControllerRef(pod)
 		refKind := ""
@@ -90,7 +91,7 @@ func GetPodsForDeletionOnNodeDrain(
 
 		if refKind == "ReplicationController" {
 			if checkReferences {
-				rc, err := client.CoreV1().ReplicationControllers(controllerNamespace).Get(controllerRef.Name, metav1.GetOptions{})
+				rc, err := listers.ReplicationControllerLister().ReplicationControllers(controllerNamespace).Get(controllerRef.Name)
 				// Assume a reason for an error is because the RC is either
 				// gone/missing or that the rc has too few replicas configured.
 				// TODO: replace the minReplica check with pod disruption budget.
@@ -100,7 +101,6 @@ func GetPodsForDeletionOnNodeDrain(
 							pod.Namespace, pod.Name, rc.Spec.Replicas, minReplica)
 					}
 					replicated = true
-
 				} else {
 					return []*apiv1.Pod{}, fmt.Errorf("replication controller for %s/%s is not available, err: %v", pod.Namespace, pod.Name, err)
 				}
@@ -109,7 +109,7 @@ func GetPodsForDeletionOnNodeDrain(
 			}
 		} else if refKind == "DaemonSet" {
 			if checkReferences {
-				ds, err := client.ExtensionsV1beta1().DaemonSets(controllerNamespace).Get(controllerRef.Name, metav1.GetOptions{})
+				ds, err := listers.DaemonSetLister().DaemonSets(controllerNamespace).Get(controllerRef.Name)
 
 				// Assume the only reason for an error is because the DaemonSet is
 				// gone/missing, not for any other cause.  TODO(mml): something more
@@ -128,7 +128,7 @@ func GetPodsForDeletionOnNodeDrain(
 			}
 		} else if refKind == "Job" {
 			if checkReferences {
-				job, err := client.BatchV1().Jobs(controllerNamespace).Get(controllerRef.Name, metav1.GetOptions{})
+				job, err := listers.JobLister().Jobs(controllerNamespace).Get(controllerRef.Name)
 
 				// Assume the only reason for an error is because the Job is
 				// gone/missing, not for any other cause.  TODO(mml): something more
@@ -143,7 +143,7 @@ func GetPodsForDeletionOnNodeDrain(
 			}
 		} else if refKind == "ReplicaSet" {
 			if checkReferences {
-				rs, err := client.ExtensionsV1beta1().ReplicaSets(controllerNamespace).Get(controllerRef.Name, metav1.GetOptions{})
+				rs, err := listers.ReplicaSetLister().ReplicaSets(controllerNamespace).Get(controllerRef.Name)
 
 				// Assume the only reason for an error is because the RS is
 				// gone/missing, not for any other cause.  TODO(mml): something more
@@ -162,7 +162,7 @@ func GetPodsForDeletionOnNodeDrain(
 			}
 		} else if refKind == "StatefulSet" {
 			if checkReferences {
-				ss, err := client.AppsV1beta1().StatefulSets(controllerNamespace).Get(controllerRef.Name, metav1.GetOptions{})
+				ss, err := listers.StatefulSetLister().StatefulSets(controllerNamespace).Get(controllerRef.Name)
 
 				// Assume the only reason for an error is because the StatefulSet is
 				// gone/missing, not for any other cause.  TODO(mml): something more
@@ -179,7 +179,8 @@ func GetPodsForDeletionOnNodeDrain(
 		if daemonsetPod {
 			continue
 		}
-		if !deleteAll && !safeToEvict {
+
+		if !deleteAll && !safeToEvict && !terminal {
 			if !replicated {
 				return []*apiv1.Pod{}, fmt.Errorf("%s/%s is not replicated", pod.Namespace, pod.Name)
 			}
@@ -194,6 +195,9 @@ func GetPodsForDeletionOnNodeDrain(
 			}
 			if HasLocalStorage(pod) && skipNodesWithLocalStorage {
 				return []*apiv1.Pod{}, fmt.Errorf("pod with local storage present: %s", pod.Name)
+			}
+			if hasNotSafeToEvictAnnotation(pod) {
+				return []*apiv1.Pod{}, fmt.Errorf("pod annotated as not safe to evict present: %s", pod.Name)
 			}
 		}
 		pods = append(pods, pod)
@@ -210,6 +214,20 @@ func ControllerRef(pod *apiv1.Pod) *metav1.OwnerReference {
 func IsMirrorPod(pod *apiv1.Pod) bool {
 	_, found := pod.ObjectMeta.Annotations[types.ConfigMirrorAnnotationKey]
 	return found
+}
+
+// isPodTerminal checks whether the pod is in a terminal state.
+func isPodTerminal(pod *apiv1.Pod) bool {
+	// pod will never be restarted
+	if pod.Spec.RestartPolicy == apiv1.RestartPolicyNever && (pod.Status.Phase == apiv1.PodSucceeded || pod.Status.Phase == apiv1.PodFailed) {
+		return true
+	}
+	// pod has run to completion and succeeded
+	if pod.Spec.RestartPolicy == apiv1.RestartPolicyOnFailure && pod.Status.Phase == apiv1.PodSucceeded {
+		return true
+	}
+	// kubelet has rejected this pod, due to eviction or some other constraint
+	return pod.Status.Phase == apiv1.PodFailed
 }
 
 // HasLocalStorage returns true if pod has any local storage.
@@ -243,6 +261,11 @@ func checkKubeSystemPDBs(pod *apiv1.Pod, pdbs []*policyv1.PodDisruptionBudget) (
 }
 
 // This checks if pod has PodSafeToEvictKey annotation
-func hasSaveToEvictAnnotation(pod *apiv1.Pod) bool {
+func hasSafeToEvictAnnotation(pod *apiv1.Pod) bool {
 	return pod.GetAnnotations()[PodSafeToEvictKey] == "true"
+}
+
+// This checks if pod has PodSafeToEvictKey annotation set to false
+func hasNotSafeToEvictAnnotation(pod *apiv1.Pod) bool {
+	return pod.GetAnnotations()[PodSafeToEvictKey] == "false"
 }

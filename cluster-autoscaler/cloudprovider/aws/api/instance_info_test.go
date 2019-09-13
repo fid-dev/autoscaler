@@ -17,121 +17,135 @@ limitations under the License.
 package api
 
 import (
-	"bytes"
 	"fmt"
-	"io/ioutil"
-	"net/http"
-	"net/url"
 	"os"
 	"testing"
 
+	"reflect"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/private/protocol/json/jsonutil"
+	"github.com/aws/aws-sdk-go/service/pricing"
 	"github.com/stretchr/testify/assert"
 )
 
-var pricingBody []byte
+func loadMockData(t *testing.T) []aws.JSONValue {
+	f, err := os.Open("pricing_ondemand_eu-west-1.json")
+	if err != nil {
+		t.Fatalf("Failed to open mock file: %v", err)
+	}
 
-func init() {
-	f, err := os.Open("pricing_eu-west-1.json")
+	grütze := &pricing.GetProductsOutput{}
+
+	err = jsonutil.UnmarshalJSON(grütze, f)
 	if err != nil {
-		panic(err)
+		t.Fatalf("Failed transform mock JSON into AWS JSONValue: %v", err)
 	}
-	pricingBody, err = ioutil.ReadAll(f)
-	if err != nil {
-		panic(err)
-	}
+
+	return grütze.PriceList
 }
 
 func TestInstanceInfoService_DescribeInstanceInfo(t *testing.T) {
-	usEastOneURL, err := url.Parse(fmt.Sprintf(awsPricingAPIURLTemplate, "us-east-1"))
-	assert.NoError(t, err)
-
-	usWestOneURL, err := url.Parse(fmt.Sprintf(awsPricingAPIURLTemplate, "us-west-1"))
-	assert.NoError(t, err)
-
-	mc := &mockClient{m: make(map[string]mockResponse)}
-	mc.m[usEastOneURL.Path] = mockResponse{pricingBody, 200}
-	mc.m[usWestOneURL.Path] = mockResponse{[]byte("some non-json stuff"), 200}
-
-	type testCase struct {
-		instanceType        string
-		availabilityZone    string
-		expectError         bool
-		expectOnDemandPrice float64
-		expectCPU           int64
+	tcs := []struct {
+		name                  string
+		instanceType          string
+		region                string
+		data                  []aws.JSONValue
+		errorExpected         bool
+		expectedError         string
+		expectedOnDemandPrice float64
+		expectedCPU           int64
+	}{
+		{
+			name:                  "error case: unknown availability region",
+			instanceType:          "m4.xlarge",
+			region:                "unknown-region",
+			data:                  []aws.JSONValue{},
+			errorExpected:         true,
+			expectedError:         "region full name not found for region: unknown-region",
+			expectedOnDemandPrice: 0,
+			expectedCPU:           0,
+		},
+		{
+			name:                  "error case: invalid server response",
+			instanceType:          "m4.xlarge",
+			region:                "us-west-1",
+			data:                  []aws.JSONValue{},
+			errorExpected:         true,
+			expectedError:         "failed to sync aws product and price information: no price information found for region us-west-1",
+			expectedOnDemandPrice: 0,
+			expectedCPU:           0,
+		},
+		{
+			name:                  "error case: unknown instance",
+			instanceType:          "unknown-instance",
+			region:                "eu-west-1",
+			data:                  loadMockData(t),
+			errorExpected:         true,
+			expectedError:         "instance info not available for instance type unknown-instance region eu-west-1",
+			expectedOnDemandPrice: 0,
+			expectedCPU:           0,
+		},
+		{
+			name:                  "good case: common case",
+			instanceType:          "m4.xlarge",
+			region:                "eu-west-1",
+			data:                  loadMockData(t),
+			errorExpected:         false,
+			expectedOnDemandPrice: 0.222,
+			expectedCPU:           4,
+		},
 	}
-	type cases []testCase
 
-	tcs := cases{
-		{ // good case: common case
-			"m4.xlarge",
-			"us-east-1",
-			false,
-			0.2,
-			4,
-		},
-		{ // error case: unknown availability zone
-			"m4.xlarge",
-			"eu-east-2",
-			true,
-			0,
-			0,
-		},
-		{ // error case: unknown instance
-			"unknown-instance",
-			"us-east-1",
-			true,
-			0,
-			0,
-		},
-		{ // error case: invalid server response
-			"m4.xlarge",
-			"us-west-1",
-			true,
-			0,
-			0,
-		},
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			indexRegion, err := regionFullName(tc.region)
+			if err != nil {
+				assert.Equal(t, err.Error(), tc.expectedError)
+				return
+			}
+
+			mc := &mockClient{m: make(map[string][]aws.JSONValue)}
+			mc.m[indexRegion] = tc.data
+
+			service := NewEC2InstanceInfoService(mc)
+			info, err := service.DescribeInstanceInfo(tc.instanceType, tc.region)
+
+			if tc.errorExpected {
+				assert.Error(t, err)
+				assert.Equal(t, tc.expectedError, err.Error())
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tc.instanceType, info.InstanceType)
+				assert.Equal(t, tc.expectedCPU, info.VCPU)
+				assert.Equal(t, tc.expectedOnDemandPrice, info.OnDemandPrice)
+			}
+		})
 	}
-
-	service := NewEC2InstanceInfoService(mc)
-
-	for n, tc := range tcs {
-		info, err := service.DescribeInstanceInfo(tc.instanceType, tc.availabilityZone)
-		if tc.expectError {
-			assert.Error(t, err, fmt.Sprintf("case %d", n))
-		} else {
-			assert.NoError(t, err, fmt.Sprintf("case %d", n))
-			assert.Equal(t, tc.instanceType, info.InstanceType)
-			assert.Equal(t, tc.expectCPU, info.VCPU)
-			assert.Equal(t, tc.expectOnDemandPrice, info.OnDemandPrice)
-		}
-
-	}
-}
-
-type mockResponse struct {
-	body       []byte
-	statusCode int
 }
 
 type mockClient struct {
-	m map[string]mockResponse
+	m map[string][]aws.JSONValue
 }
 
-func (m *mockClient) Do(req *http.Request) (*http.Response, error) {
-	if mock, found := m.m[req.URL.Path]; found {
-		return &http.Response{
-			Status:        http.StatusText(mock.statusCode),
-			StatusCode:    mock.statusCode,
-			ContentLength: int64(len(mock.body)),
-			Body:          ioutil.NopCloser(bytes.NewReader(mock.body)),
-			Request:       req,
+func (m *mockClient) GetProducts(input *pricing.GetProductsInput) (*pricing.GetProductsOutput, error) {
+	region := getRegionFromFilters(input.Filters)
+
+	if mock, found := m.m[region]; found {
+		return &pricing.GetProductsOutput{
+			PriceList: mock,
 		}, nil
 	}
-	return &http.Response{
-		Status:        http.StatusText(404),
-		StatusCode:    404,
-		Request:       req,
-		Body:          ioutil.NopCloser(bytes.NewReader([]byte{})),
-		ContentLength: 0,
-	}, nil
+
+	return nil, fmt.Errorf("no price information found for region %s", region)
+}
+
+func getRegionFromFilters(filters []*pricing.Filter) string {
+	for _, filter := range filters {
+		if reflect.DeepEqual(filter.Field, aws.String("location")) {
+			return aws.StringValue(filter.Value)
+		}
+	}
+
+	return "no-region"
 }
