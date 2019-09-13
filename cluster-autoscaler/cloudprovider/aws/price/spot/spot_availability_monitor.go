@@ -101,8 +101,8 @@ func (m *spotAvailabilityMonitor) roundtrip() error {
 		asgStatus := m.statusCache.get(asgName)
 
 		asgRequests := m.requestCache.findRequests(asgStatus.AvailabilityZone, asgStatus.IamInstanceProfile, asgStatus.InstanceType)
-
 		status := m.requestsAllValid(asgRequests)
+		klog.V(3).Infof("found %d spot requests for ASG %s - all valid: %v", len(asgRequests), asgName, status)
 
 		if asgStatus.Available != status {
 			if status == true {
@@ -133,7 +133,7 @@ func (m *spotAvailabilityMonitor) calculateRestExclusionTime(exclusionStart time
 }
 
 func (m *spotAvailabilityMonitor) updateRequestCache() error {
-	spotRequests, err := m.requestService.List()
+	spotRequests, err := m.requestService.ListDelta()
 	if err != nil {
 		return err
 	}
@@ -182,11 +182,28 @@ func (m *spotAvailabilityMonitor) asgStatus(name, iamInstanceProfile, availabili
 // if no requests are provided, the response is "true"
 // see https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-bid-status.html
 func (m *spotAvailabilityMonitor) requestsAllValid(asgRequests []*api.SpotRequest) bool {
+	status := true
+	typeCounts := map[string]int{}
+
 	if len(asgRequests) > 0 {
 		for _, request := range asgRequests {
+
+			if _, ok := typeCounts[string(request.State)]; ok {
+				typeCounts[string(request.State)] += 1
+			} else {
+				typeCounts[string(request.State)] = 1
+			}
+
+			if _, ok := typeCounts[string(request.Status)]; ok {
+				typeCounts[string(request.Status)] += 1
+			} else {
+				typeCounts[string(request.Status)] = 1
+			}
+
 			if request.State == api.AWSSpotRequestStateFailed {
 				klog.V(3).Infof("spot request %v has invalid state %v", request.ID, request.State)
-				return false
+				status = false
+				break
 			}
 
 			switch request.Status {
@@ -198,12 +215,17 @@ func (m *spotAvailabilityMonitor) requestsAllValid(asgRequests []*api.SpotReques
 				fallthrough
 			case api.AWSSpotRequestStatusPriceToLow:
 				klog.V(3).Infof("spot request %v has invalid status %v", request.ID, request.Status)
-				return false
+				status = false
 			}
 		}
 	}
 
-	return true
+	for state, count := range typeCounts {
+		klog.V(3).Infof("found %d requests with state/status %s",
+			count, state)
+	}
+
+	return status
 }
 
 type asgStatusCache struct {
