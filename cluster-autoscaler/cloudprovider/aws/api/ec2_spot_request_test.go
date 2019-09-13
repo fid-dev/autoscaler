@@ -466,7 +466,7 @@ idloop:
 			if aws.StringValue(id) == aws.StringValue(request.SpotInstanceRequestId) {
 				canceledIds = append(canceledIds, &ec2.CancelledSpotInstanceRequest{
 					SpotInstanceRequestId: request.SpotInstanceRequestId,
-					State: request.State,
+					State:                 request.State,
 				})
 				request.State = aws.String("cancelled")
 				continue idloop
