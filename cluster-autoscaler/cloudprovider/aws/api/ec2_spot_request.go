@@ -30,13 +30,6 @@ const (
 	InputStateFilter = "state"
 )
 
-var (
-	wantedStates = []string{
-		"open",
-		"failed",
-	}
-)
-
 // AwsEC2SpotRequestManager wraps the necessary AWS API methods
 type AwsEC2SpotRequestManager interface {
 	CancelSpotInstanceRequests(input *ec2.CancelSpotInstanceRequestsInput) (*ec2.CancelSpotInstanceRequestsOutput, error)
