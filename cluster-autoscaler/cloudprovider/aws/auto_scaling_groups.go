@@ -368,11 +368,16 @@ func (m *asgCache) regenerate() error {
 			return err
 		}
 
+		if lc.SpotPrice == nil {
+			klog.V(2).Infof("%s is no spot ASG: %v", asg.Name)
+			continue
+		}
+
 		asgAvailability := true
 		for _, availabilityZone := range asg.AvailabilityZones {
 			asgAvailability = m.asgAvailabilityChecker.AsgAvailability(
 				asg.Name, aws.StringValue(lc.IamInstanceProfile), availabilityZone, aws.StringValue(lc.InstanceType))
-			klog.V(5).Infof("spot ASG %s availability: %v", asg.Name, asgAvailability)
+			klog.V(2).Infof("spot ASG %s availability: %v", asg.Name, asgAvailability)
 
 			if asgAvailability == false {
 				// at least one AvailabilityZone ist not available,
