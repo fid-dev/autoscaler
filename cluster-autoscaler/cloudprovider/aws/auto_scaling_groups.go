@@ -369,7 +369,7 @@ func (m *asgCache) regenerate() error {
 		}
 
 		if lc.SpotPrice == nil {
-			klog.V(2).Infof("%s is no spot ASG: %v", asg.Name)
+			klog.V(2).Infof("%s is no spot ASG", asg.Name)
 			continue
 		}
 
@@ -394,7 +394,13 @@ func (m *asgCache) regenerate() error {
 	return nil
 }
 
+var launchConfigurationCache = map[string]*autoscaling.LaunchConfiguration{}
+
 func (m *asgCache) launchConfiguration(launchConfigurationName string) (*autoscaling.LaunchConfiguration, error) {
+	if launchConfiguration, ok := launchConfigurationCache[launchConfigurationName]; ok {
+		return launchConfiguration, nil
+	}
+
 	params := &autoscaling.DescribeLaunchConfigurationsInput{
 		LaunchConfigurationNames: []*string{aws.String(launchConfigurationName)},
 		MaxRecords:               aws.Int64(1),
@@ -408,7 +414,10 @@ func (m *asgCache) launchConfiguration(launchConfigurationName string) (*autosca
 		return nil, fmt.Errorf("no launch configuration %s found", launchConfigurationName)
 	}
 
-	return launchConfigurations.LaunchConfigurations[0], nil
+	launchConfigurationCache[launchConfigurationName] = launchConfigurations.LaunchConfigurations[0]
+	klog.V(2).Infof("cached launch configuration %s", launchConfigurationName)
+
+	return launchConfigurationCache[launchConfigurationName], nil
 }
 
 func (m *asgCache) buildAsgFromAWS(g *autoscaling.Group) (*asg, error) {
